@@ -21,10 +21,15 @@ import org.apache.doris.analysis.SlotDescriptor;
 import org.apache.doris.analysis.SlotId;
 import org.apache.doris.analysis.TupleDescriptor;
 import org.apache.doris.analysis.TupleId;
+import org.apache.doris.catalog.ArrayType;
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.DatabaseIf;
+import org.apache.doris.catalog.MapType;
+import org.apache.doris.catalog.StructField;
+import org.apache.doris.catalog.StructType;
 import org.apache.doris.catalog.TableIf;
 import org.apache.doris.catalog.Type;
+import org.apache.doris.common.DdlException;
 import org.apache.doris.common.UserException;
 import org.apache.doris.common.util.LocationPath;
 import org.apache.doris.datasource.CatalogIf;
@@ -37,6 +42,7 @@ import org.apache.doris.datasource.iceberg.IcebergSnapshotCacheValue;
 import org.apache.doris.datasource.iceberg.IcebergUtils;
 import org.apache.doris.datasource.mvcc.MvccTableInfo;
 import org.apache.doris.nereids.StatementContext;
+import org.apache.doris.nereids.exceptions.NotSupportedException;
 import org.apache.doris.planner.PlanNodeId;
 import org.apache.doris.planner.ScanContext;
 import org.apache.doris.qe.ConnectContext;
@@ -137,6 +143,10 @@ public class IcebergScanNodeTest {
             params = new TFileScanRangeParams();
             enableCurrentIcebergScanSemantics();
             return params.getIcebergScanSemanticsVersion();
+        }
+
+        TupleDescriptor tupleDescriptor() {
+            return desc;
         }
     }
 
@@ -755,5 +765,71 @@ public class IcebergScanNodeTest {
         } catch (UserException e) {
             Assert.assertTrue(e.getMessage().contains("backend 10001 is a smooth upgrade source"));
         }
+    }
+
+    @Test
+    public void testGetFileFormatTypeRejectsVariantForOrc() throws Exception {
+        SessionVariable sv = new SessionVariable();
+        TestIcebergScanNode node = new TestIcebergScanNode(sv);
+        addSlot(node.tupleDescriptor(), new Column("v", Type.VARIANT, true));
+        Table table = Mockito.mock(Table.class);
+        Mockito.when(table.properties()).thenReturn(
+                Collections.singletonMap("write.format.default", "orc"));
+        setIcebergTable(node, table);
+
+        DdlException exception = Assert.assertThrows(DdlException.class, () -> node.getFileFormatType());
+        Assert.assertTrue(exception.getMessage().contains(
+                "Reading Iceberg VARIANT columns is only supported for Parquet files"));
+        Assert.assertTrue(exception.getMessage().contains("v"));
+    }
+
+    @Test
+    public void testGetFileFormatTypeRejectsNestedVariantForOrc() throws Exception {
+        SessionVariable sv = new SessionVariable();
+        TestIcebergScanNode node = new TestIcebergScanNode(sv);
+        Type nestedVariantType = new StructType(new StructField("events",
+                ArrayType.create(new MapType(Type.STRING, Type.VARIANT), true)));
+        addSlot(node.tupleDescriptor(), new Column("payload", nestedVariantType, true));
+        Table table = Mockito.mock(Table.class);
+        Mockito.when(table.properties()).thenReturn(
+                Collections.singletonMap("write.format.default", "orc"));
+        setIcebergTable(node, table);
+
+        DdlException exception = Assert.assertThrows(DdlException.class, () -> node.getFileFormatType());
+        Assert.assertTrue(exception.getMessage().contains(
+                "Reading Iceberg VARIANT columns is only supported for Parquet files"));
+        Assert.assertTrue(exception.getMessage().contains("payload"));
+    }
+
+    @Test
+    public void testGetFileFormatTypeAllowsVariantForParquet() throws Exception {
+        SessionVariable sv = new SessionVariable();
+        TestIcebergScanNode node = new TestIcebergScanNode(sv);
+        addSlot(node.tupleDescriptor(), new Column("v", Type.VARIANT, true));
+        Table table = Mockito.mock(Table.class);
+        Mockito.when(table.properties()).thenReturn(
+                Collections.singletonMap("write.format.default", "parquet"));
+        setIcebergTable(node, table);
+
+        Assert.assertEquals(TFileFormatType.FORMAT_PARQUET, node.getFileFormatType());
+    }
+
+    @Test
+    public void testValidateVariantDataFileFormatRejectsOrcSplit() {
+        SessionVariable sv = new SessionVariable();
+        TestIcebergScanNode node = new TestIcebergScanNode(sv);
+        addSlot(node.tupleDescriptor(), new Column("v", Type.VARIANT, true));
+
+        NotSupportedException exception = Assert.assertThrows(NotSupportedException.class,
+                () -> node.validateVariantDataFileFormat(org.apache.iceberg.FileFormat.ORC, "file:///tmp/v.orc"));
+        Assert.assertTrue(exception.getMessage().contains(
+                "Reading Iceberg VARIANT columns is only supported for Parquet files"));
+        Assert.assertTrue(exception.getMessage().contains("file:///tmp/v.orc"));
+    }
+
+    private static void addSlot(TupleDescriptor desc, Column column) {
+        SlotDescriptor slot = new SlotDescriptor(new SlotId(desc.getSlots().size()), desc.getId());
+        slot.setColumn(column);
+        desc.addSlot(slot);
     }
 }

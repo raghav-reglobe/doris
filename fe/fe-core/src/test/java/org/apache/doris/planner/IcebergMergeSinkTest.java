@@ -18,6 +18,7 @@
 package org.apache.doris.planner;
 
 import org.apache.doris.catalog.DatabaseIf;
+import org.apache.doris.common.AnalysisException;
 import org.apache.doris.datasource.CatalogProperty;
 import org.apache.doris.datasource.iceberg.IcebergExternalCatalog;
 import org.apache.doris.datasource.iceberg.IcebergExternalTable;
@@ -72,6 +73,34 @@ public class IcebergMergeSinkTest {
         Assertions.assertFalse(thriftSink.getSchemaJson().contains(IcebergUtils.ICEBERG_ROW_ID_COL));
         Assertions.assertFalse(thriftSink.getSchemaJson().contains(
                 IcebergUtils.ICEBERG_LAST_UPDATED_SEQUENCE_NUMBER_COL));
+    }
+
+    @Test
+    public void testBindDataSinkRejectsVariantSchema() {
+        Schema schema = new Schema(
+                Types.NestedField.required(1, "id", Types.IntegerType.get()),
+                Types.NestedField.optional(2, "payload", Types.VariantType.get()));
+        IcebergMergeSink sink = new IcebergMergeSink(
+                mockIcebergExternalTable(2, schema), new DeleteCommandContext());
+
+        AnalysisException exception = Assertions.assertThrows(
+                AnalysisException.class, () -> sink.bindDataSink(Optional.empty()));
+        Assertions.assertTrue(exception.getMessage().contains(
+                "Writing Iceberg VARIANT columns is not supported: payload"));
+    }
+
+    @Test
+    public void testBindDataSinkAllowsVariantSchemaForDeleteOnlyMerge() throws Exception {
+        Schema schema = new Schema(
+                Types.NestedField.required(1, "id", Types.IntegerType.get()),
+                Types.NestedField.optional(2, "payload", Types.VariantType.get()));
+        IcebergMergeSink sink = new IcebergMergeSink(
+                mockIcebergExternalTable(2, schema), new DeleteCommandContext(), false);
+
+        sink.bindDataSink(Optional.empty());
+
+        TIcebergMergeSink thriftSink = sink.tDataSink.getIcebergMergeSink();
+        Assertions.assertTrue(thriftSink.getSchemaJson().contains("\"payload\""));
     }
 
     @Test
@@ -148,6 +177,10 @@ public class IcebergMergeSinkTest {
             int formatVersion, Map<String, String> metricsProperties) {
         return mockIcebergExternalTable(formatVersion,
                 new Schema(Types.NestedField.required(1, "id", Types.IntegerType.get())), metricsProperties);
+    }
+
+    private static IcebergExternalTable mockIcebergExternalTable(int formatVersion, Schema schema) {
+        return mockIcebergExternalTable(formatVersion, schema, Collections.emptyMap());
     }
 
     private static IcebergExternalTable mockIcebergExternalTable(

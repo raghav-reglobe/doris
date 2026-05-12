@@ -683,6 +683,8 @@ public class IcebergUtils {
                 return ScalarType.createDatetimeV2Type(ICEBERG_DATETIME_SCALE_MS);
             case TIME:
                 return Type.UNSUPPORTED;
+            case VARIANT:
+                return Type.VARIANT;
             default:
                 throw new IllegalArgumentException("Cannot transform unknown type: " + primitive);
         }
@@ -695,6 +697,8 @@ public class IcebergUtils {
                     enableMappingVarbinary, enableMappingTimestampTz);
         }
         switch (type.typeId()) {
+            case VARIANT:
+                return Type.VARIANT;
             case LIST:
                 Types.ListType list = (Types.ListType) type;
                 return ArrayType.create(
@@ -2031,6 +2035,52 @@ public class IcebergUtils {
                 .filter(field -> field.type().isPrimitiveType())
                 .anyMatch(field -> MetricsUtil.metricsMode(writerSchema, metricsConfig, field.fieldId())
                         != MetricsModes.None.get());
+    }
+
+    public static void validateVariantWriteUnsupported(Schema schema) throws AnalysisException {
+        Optional<String> variantPath = findVariantFieldPath(schema);
+        if (variantPath.isPresent()) {
+            throw new AnalysisException("Writing Iceberg VARIANT columns is not supported: "
+                    + variantPath.get());
+        }
+    }
+
+    private static Optional<String> findVariantFieldPath(Schema schema) {
+        for (NestedField field : schema.columns()) {
+            Optional<String> variantPath = findVariantFieldPath(field.type(), field.name());
+            if (variantPath.isPresent()) {
+                return variantPath;
+            }
+        }
+        return Optional.empty();
+    }
+
+    private static Optional<String> findVariantFieldPath(
+            org.apache.iceberg.types.Type type, String path) {
+        switch (type.typeId()) {
+            case VARIANT:
+                return Optional.of(path);
+            case STRUCT:
+                for (NestedField field : type.asStructType().fields()) {
+                    Optional<String> variantPath =
+                            findVariantFieldPath(field.type(), path + "." + field.name());
+                    if (variantPath.isPresent()) {
+                        return variantPath;
+                    }
+                }
+                return Optional.empty();
+            case LIST:
+                return findVariantFieldPath(type.asListType().elementType(), path + "[]");
+            case MAP:
+                Optional<String> keyVariantPath =
+                        findVariantFieldPath(type.asMapType().keyType(), path + ".key");
+                if (keyVariantPath.isPresent()) {
+                    return keyVariantPath;
+                }
+                return findVariantFieldPath(type.asMapType().valueType(), path + ".value");
+            default:
+                return Optional.empty();
+        }
     }
 
     public static int getFormatVersion(Table table) {
