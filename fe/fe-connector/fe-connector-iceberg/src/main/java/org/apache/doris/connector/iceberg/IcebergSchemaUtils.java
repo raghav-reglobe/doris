@@ -109,6 +109,52 @@ public final class IcebergSchemaUtils {
     }
 
     /**
+     * Depth-first search for a VARIANT field anywhere in {@code schema} (top level or nested inside
+     * STRUCT/LIST/MAP), returning the dotted path of the first one found. The write side uses this to refuse
+     * data-file writes into VARIANT-bearing schemas (the BE writer has no VARIANT encoder — #63192 is a
+     * read-only port); the read side uses the same walk shape per-column via {@link #typeContainsVariant}.
+     */
+    public static Optional<String> findVariantFieldPath(Schema schema) {
+        for (Types.NestedField field : schema.columns()) {
+            Optional<String> variantPath = findVariantFieldPath(field.type(), field.name());
+            if (variantPath.isPresent()) {
+                return variantPath;
+            }
+        }
+        return Optional.empty();
+    }
+
+    private static Optional<String> findVariantFieldPath(Type type, String path) {
+        switch (type.typeId()) {
+            case VARIANT:
+                return Optional.of(path);
+            case STRUCT:
+                for (Types.NestedField field : type.asStructType().fields()) {
+                    Optional<String> variantPath = findVariantFieldPath(field.type(), path + "." + field.name());
+                    if (variantPath.isPresent()) {
+                        return variantPath;
+                    }
+                }
+                return Optional.empty();
+            case LIST:
+                return findVariantFieldPath(type.asListType().elementType(), path + "[]");
+            case MAP:
+                Optional<String> keyVariantPath = findVariantFieldPath(type.asMapType().keyType(), path + ".key");
+                if (keyVariantPath.isPresent()) {
+                    return keyVariantPath;
+                }
+                return findVariantFieldPath(type.asMapType().valueType(), path + ".value");
+            default:
+                return Optional.empty();
+        }
+    }
+
+    /** True when {@code type} is VARIANT or contains one nested inside STRUCT/LIST/MAP. */
+    public static boolean typeContainsVariant(Type type) {
+        return findVariantFieldPath(type, "").isPresent();
+    }
+
+    /**
      * Orchestrator: build the schema dictionary for {@code table} keyed off the requested (lowercased) column
      * names and serialize it for transport via the scan-node props. {@code requestedLowerNames} is the pruned
      * scan-slot list ({@code PluginDrivenScanNode} hands the provider the requested columns); an empty list

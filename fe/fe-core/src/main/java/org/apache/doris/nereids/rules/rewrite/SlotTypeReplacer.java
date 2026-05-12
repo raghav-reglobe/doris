@@ -64,6 +64,7 @@ import org.apache.doris.nereids.types.DataType;
 import org.apache.doris.nereids.types.MapType;
 import org.apache.doris.nereids.types.NestedColumnPrunable;
 import org.apache.doris.nereids.types.StructType;
+import org.apache.doris.nereids.types.VariantType;
 import org.apache.doris.nereids.util.MoreFieldsThread;
 
 import com.google.common.collect.ImmutableCollection;
@@ -236,8 +237,8 @@ public class SlotTypeReplacer extends DefaultPlanRewriter<Void> {
                 = replaceExpressions(except.getOutputs(), true, false);
 
         if (replacedRegularChildrenOutputs.first || replacedOutputs.first) {
-            return new LogicalExcept(except.getQualifier(), except.getOutputs(),
-                    except.getRegularChildrenOutputs(), except.children());
+            return new LogicalExcept(except.getQualifier(), replacedOutputs.second,
+                    replacedRegularChildrenOutputs.second, except.children());
         }
 
         return except;
@@ -254,8 +255,8 @@ public class SlotTypeReplacer extends DefaultPlanRewriter<Void> {
                 = replaceExpressions(intersect.getOutputs(), true, false);
 
         if (replacedRegularChildrenOutputs.first || replacedOutputs.first) {
-            return new LogicalIntersect(intersect.getQualifier(), intersect.getOutputs(),
-                    intersect.getRegularChildrenOutputs(), intersect.children());
+            return new LogicalIntersect(intersect.getQualifier(), replacedOutputs.second,
+                    replacedRegularChildrenOutputs.second, intersect.children());
         }
         return intersect;
     }
@@ -659,16 +660,22 @@ public class SlotTypeReplacer extends DefaultPlanRewriter<Void> {
                     replaceAccessPathToFieldId(
                             originPath, index + 1, ((MapType) type).getValueType(), column.getChildren().get(1)
                     );
+                } else if (fieldName.equals(AccessPathInfo.ACCESS_MAP_KEYS)) {
+                    replaceAccessPathToFieldId(
+                            originPath, index + 1, ((MapType) type).getKeyType(), column.getChildren().get(0)
+                    );
                 }
             } else if (type instanceof StructType) {
                 for (Column child : column.getChildren()) {
-                    if (child.getName().equals(fieldName)) {
+                    if (child.getName().equalsIgnoreCase(fieldName)) {
                         originPath.set(index, String.valueOf(child.getUniqueId()));
-                        DataType childType = ((StructType) type).getNameToFields().get(fieldName).getDataType();
+                        DataType childType = ((StructType) type).getField(fieldName).getDataType();
                         replaceAccessPathToFieldId(originPath, index + 1, childType, child);
                         break;
                     }
                 }
+            } else if (type instanceof VariantType) {
+                replaceAccessPathToFieldId(originPath, index + 1, type, column);
             } else {
                 originPath.set(index, String.valueOf(column.getUniqueId()));
             }

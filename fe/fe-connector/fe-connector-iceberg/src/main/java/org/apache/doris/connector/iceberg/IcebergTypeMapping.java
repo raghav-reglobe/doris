@@ -56,6 +56,8 @@ public final class IcebergTypeMapping {
                     enableMappingVarbinary, enableMappingTimestampTz);
         }
         switch (icebergType.typeId()) {
+            case VARIANT:
+                return ConnectorType.of("VARIANT");
             case LIST:
                 // Carry the element field-id (legacy IcebergUtils.updateIcebergColumnUniqueId recurses into
                 // the element with ListType.fields().get(0).fieldId()) so the BE field-id scan path matches
@@ -153,6 +155,8 @@ public final class IcebergTypeMapping {
                 // iceberg TIME has no Doris analogue -> UNSUPPORTED (explicit, byte-parity with legacy
                 // IcebergUtils which also mapped TIME to Type.UNSUPPORTED).
                 return ConnectorType.of("UNSUPPORTED");
+            case VARIANT:
+                return ConnectorType.of("VARIANT");
             default:
                 // Any primitive iceberg type Doris cannot represent — notably the v3 types TIMESTAMP_NANO /
                 // GEOMETRY / GEOGRAPHY / UNKNOWN — degrades to UNSUPPORTED: the table still LOADS and only this

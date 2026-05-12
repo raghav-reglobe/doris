@@ -518,7 +518,8 @@ public class IcebergScanPlanProvider implements ConnectorScanPlanProvider {
                     scan, session, table, filter, sliceSize);
             return new IcebergStreamingSplitSource(tasks, table, formatVersion, partitioned,
                     orderedPartitionKeys, zone, uriNormalizer, sliceSize,
-                    iceHandle.getRewriteFileScope(), iceHandle);
+                    iceHandle.getRewriteFileScope(), iceHandle,
+                    findVariantReadColumn(columns, table.schema()));
         } catch (RuntimeException e) {
             throw IcebergExceptionUtils.wrapMetadataReadFailure(iceHandle, e);
         }
@@ -583,6 +584,7 @@ public class IcebergScanPlanProvider implements ConnectorScanPlanProvider {
         private final long sliceSize;
         private final Set<String> rewriteScope;
         private final IcebergTableHandle handle;
+        private final String variantReadColumn;
         // Lazily opened on first hasNext() so the ctor never throws — iceberg's ParallelIterable submits
         // manifest readers in tasks.iterator(), which can fail; opening it eagerly here would throw out of
         // streamSplits() BEFORE the source is returned, leaking the planFiles() iterable (the engine pump's
@@ -598,7 +600,7 @@ public class IcebergScanPlanProvider implements ConnectorScanPlanProvider {
         IcebergStreamingSplitSource(CloseableIterable<FileScanTask> tasks, Table table, int formatVersion,
                 boolean partitioned, List<String> orderedPartitionKeys, ZoneId zone,
                 UnaryOperator<String> uriNormalizer, long sliceSize, Set<String> rewriteScope,
-                IcebergTableHandle handle) {
+                IcebergTableHandle handle, String variantReadColumn) {
             this.tasks = tasks;
             this.table = table;
             this.formatVersion = formatVersion;
@@ -609,6 +611,7 @@ public class IcebergScanPlanProvider implements ConnectorScanPlanProvider {
             this.sliceSize = sliceSize;
             this.rewriteScope = rewriteScope;
             this.handle = handle;
+            this.variantReadColumn = variantReadColumn;
         }
 
         @Override
@@ -622,7 +625,8 @@ public class IcebergScanPlanProvider implements ConnectorScanPlanProvider {
                 }
                 while (iterator.hasNext()) {
                     IcebergScanRange range = buildRangeForTask(iterator.next(), table, formatVersion, partitioned,
-                            orderedPartitionKeys, zone, uriNormalizer, sliceSize, rewriteScope, null, scratch);
+                            orderedPartitionKeys, zone, uriNormalizer, sliceSize, rewriteScope, null, scratch,
+                            variantReadColumn);
                     if (range != null) {
                         buffered = range;
                         return true;
@@ -694,6 +698,9 @@ public class IcebergScanPlanProvider implements ConnectorScanPlanProvider {
         List<String> orderedPartitionKeys = IcebergPartitionUtils.getIdentityPartitionColumns(table);
         ZoneId zone = resolveSessionZone(session);
         boolean partitioned = table.spec().isPartitioned();
+        // Scan-invariant: the name of the first projected column whose iceberg type contains VARIANT (nested
+        // included), or null. Threaded into buildRangeForTask, which refuses non-parquet data files for it.
+        String variantReadColumn = findVariantReadColumn(columns, table.schema());
 
         // Vended credentials (T09): extract the per-table REST vended token ONCE per scan (gated on the catalog
         // flag iceberg.rest.vended-credentials-enabled, mirroring legacy IcebergVendedCredentialsProvider), then
@@ -755,7 +762,7 @@ public class IcebergScanPlanProvider implements ConnectorScanPlanProvider {
                 // identical to the streaming path's IcebergStreamingSplitSource so both produce the same ranges.
                 IcebergScanRange range = buildRangeForTask(task, table, formatVersion, partitioned,
                         orderedPartitionKeys, zone, uriNormalizer, plan.targetSplitSize, rewriteScope,
-                        rewritableDeleteSupply, scratch);
+                        rewritableDeleteSupply, scratch, variantReadColumn);
                 if (range != null) {
                     ranges.add(range);
                 }
@@ -804,6 +811,32 @@ public class IcebergScanPlanProvider implements ConnectorScanPlanProvider {
     }
 
     /**
+     * Resolve the name of the first requested column whose iceberg type contains VARIANT (top-level or nested
+     * in STRUCT/LIST/MAP), or {@code null} when the scan projects none. Field-id resolution first (the stable
+     * identity an {@link IcebergColumnHandle} carries), name fallback for handles without one — mirrors legacy
+     * {@code IcebergScanNode.findVariantReadColumnName}, which walked the tuple's slot descriptors.
+     */
+    private static String findVariantReadColumn(List<ConnectorColumnHandle> columns, Schema schema) {
+        if (columns == null) {
+            return null;
+        }
+        for (ConnectorColumnHandle column : columns) {
+            if (!(column instanceof IcebergColumnHandle)) {
+                continue;
+            }
+            IcebergColumnHandle handle = (IcebergColumnHandle) column;
+            Types.NestedField field = handle.getFieldId() >= 0 ? schema.findField(handle.getFieldId()) : null;
+            if (field == null) {
+                field = schema.findField(handle.getName());
+            }
+            if (field != null && IcebergSchemaUtils.typeContainsVariant(field.type())) {
+                return field.name();
+            }
+        }
+        return null;
+    }
+
+    /**
      * Map one {@link FileScanTask} to its BE-ready {@link IcebergScanRange}, applying the rewrite-scope filter
      * (returns {@code null} to skip a data file outside the scope) and the v3 commit-bridge rewritable-delete
      * accumulation. Shared by the synchronous {@link #planScanInternal} loop and the streaming
@@ -814,10 +847,21 @@ public class IcebergScanPlanProvider implements ConnectorScanPlanProvider {
     private IcebergScanRange buildRangeForTask(FileScanTask task, Table table, int formatVersion,
             boolean partitioned, List<String> orderedPartitionKeys, ZoneId zone,
             UnaryOperator<String> uriNormalizer, long targetSplitSize, Set<String> rewriteScope,
-            Map<String, List<TIcebergDeleteFileDesc>> rewritableDeleteSupply, PerFileScratch scratch) {
+            Map<String, List<TIcebergDeleteFileDesc>> rewritableDeleteSupply, PerFileScratch scratch,
+            String variantReadColumn) {
         DataFile dataFile = task.file();
         if (rewriteScope != null && !rewriteScope.contains(dataFile.path().toString())) {
             return null;
+        }
+        // VARIANT reads are Parquet-only on this lineage (the #63192 port lives in the BE parquet v1 reader;
+        // there is no ORC VARIANT decode path). Refuse per DATA FILE, not per table: a mixed-format table
+        // remains readable as long as the scan does not project a VARIANT column (variantReadColumn == null)
+        // or the file is parquet — mirrors legacy IcebergScanNode.validateVariantDataFileFormat.
+        if (variantReadColumn != null && dataFile.format() != FileFormat.PARQUET) {
+            throw new DorisConnectorException(
+                    "Reading Iceberg VARIANT columns is only supported for Parquet files, "
+                            + "but data file format is " + dataFile.format().name() + ": " + variantReadColumn
+                            + " (" + dataFile.path() + ")");
         }
         // First byte-slice of a new data file? (scratch still holds the previous file until buildRange refreshes
         // it below — so capture this BEFORE the buildRange call.) The v3 rewritable-delete supply is identical

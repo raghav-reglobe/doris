@@ -182,6 +182,21 @@ public class IcebergWritePlanProvider implements ConnectorWritePlanProvider {
         validateBoundWriteMetadata(table, handle);
         validateBoundWriteColumns(table, schemaContext, handle, writeContext.getWriteOperation());
 
+        // VARIANT columns are read-only on this lineage (the #63192 port): the BE writer has no VARIANT
+        // encoder, so every operation that writes DATA files into a VARIANT-bearing schema is refused at plan
+        // time. DELETE is exempt — it emits only delete files (position deletes / v3 deletion vectors), never
+        // data files. NB a delete-only MERGE (matched-DELETE clauses only) is ALSO refused here: the
+        // generalized row-level write handle no longer carries the clause shape (legacy fe-core threaded a
+        // writeDataFiles flag from IcebergMergeCommand), and plain DELETE covers that need.
+        if (writeContext.getWriteOperation() != WriteOperation.DELETE) {
+            Schema writeSchema = schemaContext == null ? table.schema() : schemaContext.getSchema();
+            Optional<String> variantPath = IcebergSchemaUtils.findVariantFieldPath(writeSchema);
+            if (variantPath.isPresent()) {
+                throw new DorisConnectorException(
+                        "Writing Iceberg VARIANT columns is not supported: " + variantPath.get());
+            }
+        }
+
         // commit-bridge supply (S4 part 2): read the non-equality delete supply the scan seam accumulated into the
         // per-statement scope. DELETE/MERGE attach it to the sink so the BE OR-merges old deletes into the new
         // deletion vector (a missing supply silently resurrects deleted rows); INSERT/OVERWRITE/REWRITE ignore it
