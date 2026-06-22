@@ -1186,19 +1186,32 @@ public class IcebergScanNode extends FileQueryScanNode {
         }
 
         Map<String, String> summary = snapshot.summary();
-        if (!summary.get(IcebergUtils.TOTAL_EQUALITY_DELETES).equals("0")) {
+        // Snapshot summaries are NOT guaranteed to carry the total-* counters:
+        // snapshots produced by compaction/replace (and some writers) may omit
+        // total-equality-deletes / total-position-deletes / total-records. The
+        // original code called .equals()/parseLong() on the Map.get() result
+        // unconditionally, which NPEs when a counter is absent (observed on
+        // gold.cashify_mart.orders). When any required counter is missing, fall
+        // back to a normal scan (return -1 = "cannot push down count").
+        String equalityDeletes = summary.get(IcebergUtils.TOTAL_EQUALITY_DELETES);
+        String positionDeletes = summary.get(IcebergUtils.TOTAL_POSITION_DELETES);
+        String totalRecords = summary.get(IcebergUtils.TOTAL_RECORDS);
+        if (equalityDeletes == null || positionDeletes == null || totalRecords == null) {
+            return -1;
+        }
+        if (!equalityDeletes.equals("0")) {
             // has equality delete files, can not push down count
             return -1;
         }
 
-        long deleteCount = Long.parseLong(summary.get(IcebergUtils.TOTAL_POSITION_DELETES));
+        long deleteCount = Long.parseLong(positionDeletes);
         if (deleteCount == 0) {
             // no delete files, can push down count directly
-            return Long.parseLong(summary.get(IcebergUtils.TOTAL_RECORDS));
+            return Long.parseLong(totalRecords);
         }
         if (sessionVariable.ignoreIcebergDanglingDelete) {
             // has position delete files, if we ignore dangling delete, can push down count
-            return Long.parseLong(summary.get(IcebergUtils.TOTAL_RECORDS)) - deleteCount;
+            return Long.parseLong(totalRecords) - deleteCount;
         } else {
             // otherwise, can not push down count
             return -1;
