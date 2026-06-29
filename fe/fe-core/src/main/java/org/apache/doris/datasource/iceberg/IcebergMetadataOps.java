@@ -67,6 +67,7 @@ import org.apache.iceberg.catalog.SupportsNamespaces;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.catalog.ViewCatalog;
 import org.apache.iceberg.exceptions.NoSuchNamespaceException;
+import org.apache.iceberg.exceptions.NotAuthorizedException;
 import org.apache.iceberg.expressions.Expressions;
 import org.apache.iceberg.expressions.Literal;
 import org.apache.iceberg.expressions.Term;
@@ -84,6 +85,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -132,7 +134,7 @@ public class IcebergMetadataOps implements ExternalMetadataOps {
     @Override
     public boolean tableExist(String dbName, String tblName) {
         try {
-            return executionAuthenticator.execute(() -> catalog.tableExists(getTableIdentifier(dbName, tblName)));
+            return executeWithReauthRetry(() -> catalog.tableExists(getTableIdentifier(dbName, tblName)));
         } catch (Exception e) {
             throw new RuntimeException("Failed to check table exist, error message is:" + e.getMessage(), e);
         }
@@ -140,7 +142,7 @@ public class IcebergMetadataOps implements ExternalMetadataOps {
 
     public boolean databaseExist(String dbName) {
         try {
-            return executionAuthenticator.execute(() -> nsCatalog.namespaceExists(getNamespace(dbName)));
+            return executeWithReauthRetry(() -> nsCatalog.namespaceExists(getNamespace(dbName)));
         } catch (Exception e) {
             throw new RuntimeException("Failed to check database exist, error message is:" + e.getMessage(), e);
         }
@@ -148,7 +150,7 @@ public class IcebergMetadataOps implements ExternalMetadataOps {
 
     public List<String> listDatabaseNames() {
         try {
-            return executionAuthenticator.execute(() -> listNestedNamespaces(getNamespace()));
+            return executeWithReauthRetry(() -> listNestedNamespaces(getNamespace()));
         } catch (Exception e) {
             LOG.warn("failed to list database names in catalog {}, root cause: {}",
                     dorisCatalog.getName(), Util.getRootCauseMessage(e), e);
@@ -183,7 +185,7 @@ public class IcebergMetadataOps implements ExternalMetadataOps {
     @Override
     public List<String> listTableNames(String dbName) {
         try {
-            return executionAuthenticator.execute(() -> {
+            return executeWithReauthRetry(() -> {
                 List<TableIdentifier> tableIdentifiers = catalog.listTables(getNamespace(dbName));
                 List<String> views;
                 // Our original intention was simply to clearly define the responsibilities of ViewCatalog and Catalog.
@@ -1118,7 +1120,7 @@ public class IcebergMetadataOps implements ExternalMetadataOps {
     @Override
     public Table loadTable(String dbName, String tblName) {
         try {
-            return executionAuthenticator.execute(() -> catalog.loadTable(getTableIdentifier(dbName, tblName)));
+            return executeWithReauthRetry(() -> catalog.loadTable(getTableIdentifier(dbName, tblName)));
         } catch (Exception e) {
             throw new RuntimeException("Failed to load table, error message is:" + e.getMessage(), e);
         }
@@ -1130,7 +1132,7 @@ public class IcebergMetadataOps implements ExternalMetadataOps {
             return false;
         }
         try {
-            return executionAuthenticator.execute(() ->
+            return executeWithReauthRetry(() ->
                     ((ViewCatalog) catalog).viewExists(getTableIdentifier(remoteDbName, remoteViewName)));
         } catch (Exception e) {
             throw new RuntimeException("Failed to check view exist, error message is:" + e.getMessage(), e);
@@ -1144,9 +1146,8 @@ public class IcebergMetadataOps implements ExternalMetadataOps {
             return null;
         }
         try {
-            ViewCatalog viewCatalog = (ViewCatalog) catalog;
-            return executionAuthenticator.execute(
-                    () -> viewCatalog.loadView(TableIdentifier.of(getNamespace(dbName), tblName)));
+            return executeWithReauthRetry(
+                    () -> ((ViewCatalog) catalog).loadView(TableIdentifier.of(getNamespace(dbName), tblName)));
         } catch (Exception e) {
             throw new RuntimeException("Failed to load view, error message is:" + e.getMessage(), e);
         }
@@ -1158,7 +1159,7 @@ public class IcebergMetadataOps implements ExternalMetadataOps {
             return Collections.emptyList();
         }
         try {
-            return executionAuthenticator.execute(() ->
+            return executeWithReauthRetry(() ->
                     ((ViewCatalog) catalog).listViews(getNamespace(db))
                             .stream().map(TableIdentifier::name).collect(Collectors.toList()));
         } catch (RuntimeException e) {
@@ -1167,6 +1168,57 @@ public class IcebergMetadataOps implements ExternalMetadataOps {
         } catch (Exception e) {
             throw new RuntimeException("Failed to list view names, error message is:" + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Wraps an idempotent read op with re-auth-on-401 self-heal. The Iceberg REST
+     * OAuth client caches its Polaris token; if that token expires or is invalidated
+     * (e.g. a token-refresh POST failed under Polaris load), the client wedges and
+     * every call returns NotAuthorizedException (401) -- it does NOT re-auth on its
+     * own, so the catalog stays unusable until the FE is restarted. Detect that, force
+     * a full catalog-client rebuild on the parent catalog
+     * (ExternalCatalog.resetToUninitialized(true) -> fresh RESTSessionCatalog + fresh
+     * OAuth token, and the stale "db not found" cache entries are invalidated), adopt
+     * the fresh client, and retry the op ONCE. Bounded to a single retry; concurrent
+     * 401s coalesce (only the thread still holding the wedged client rebuilds, the rest
+     * adopt the shared rebuilt client). Idempotent reads only -- never in-flight
+     * mutations/commits.
+     */
+    private <T> T executeWithReauthRetry(Callable<T> op) throws Exception {
+        Catalog attemptedOn = this.catalog;
+        try {
+            return executionAuthenticator.execute(op);
+        } catch (Exception e) {
+            if (!isAuthExpired(e)) {
+                throw e;
+            }
+            synchronized (dorisCatalog) {
+                if (this.catalog == attemptedOn) {
+                    LOG.warn("catalog {}: Polaris returned 401/Not-authorized (cached OAuth token "
+                            + "is stale) -- rebuilding the catalog client + re-authing, then retrying once.",
+                            dorisCatalog.getName());
+                    dorisCatalog.resetToUninitialized(true);
+                    dorisCatalog.makeSureInitialized();
+                    ExternalMetadataOps rebuilt = dorisCatalog.getMetadataOps();
+                    if (rebuilt instanceof IcebergMetadataOps
+                            && ((IcebergMetadataOps) rebuilt).getCatalog() != null) {
+                        this.catalog = ((IcebergMetadataOps) rebuilt).getCatalog();
+                        this.nsCatalog = (SupportsNamespaces) this.catalog;
+                        this.executionAuthenticator = dorisCatalog.getExecutionAuthenticator();
+                    }
+                }
+                // else: another thread already rebuilt the shared client -> just retry on it.
+            }
+            return executionAuthenticator.execute(op);
+        }
+    }
+
+    private static boolean isAuthExpired(Throwable e) {
+        Throwable root = ExceptionUtils.getRootCause(e);
+        Throwable t = (root != null) ? root : e;
+        return t instanceof NotAuthorizedException
+                || "NotAuthorizedException".equals(t.getClass().getSimpleName())
+                || (t.getMessage() != null && t.getMessage().contains("Not authorized"));
     }
 
     private TableIdentifier getTableIdentifier(String dbName, String tblName) {
