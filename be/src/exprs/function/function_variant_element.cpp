@@ -28,12 +28,13 @@
 
 #include "common/status.h"
 #include "core/assert_cast.h"
-#include "util/jsonb_utils.h"
 #include "core/block/block.h"
 #include "core/column/column.h"
+#include "core/column/column_map.h"
 #include "core/column/column_nullable.h"
 #include "core/column/column_string.h"
 #include "core/column/column_variant.h"
+#include "core/column/column_vector.h"
 #include "core/column/subcolumn_tree.h"
 #include "core/column/variant_column_utils.h"
 #include "core/column/variant_v2/column_variant_v2.h"
@@ -52,6 +53,7 @@
 #include "simdjson.h"
 #include "util/defer_op.h"
 #include "util/json/path_in_data.h"
+#include "util/jsonb_utils.h"
 
 namespace doris {
 
@@ -87,13 +89,59 @@ public:
     }
 
     // wrap variant column with nullable
-    // 1. if variant is null root(empty or nothing as root), then nullable map is all null
+    // 1. if variant is null root(empty or nothing as root):
+    //    a. rows may still carry data in non-root SUBCOLUMNS and/or the
+    //       sparse/doc maps — an OBJECT-shaped element result (col['k'] where
+    //       k holds a nested object, e.g. shredded typed_value sub-objects)
+    //       has no scalar root by construction. A blanket all-null map made
+    //       every such result read as NULL (CAST / IS NULL) even though
+    //       chained element access read the data fine. Derive the nullable
+    //       map per row from the actual data instead.
+    //    b. only when there is genuinely no data source is the map all null.
     // 2. if variant is scalar variant, then use the root's nullable map
     // 3. if variant is hierarchical variant, then create a nullable map with all none null
     ColumnPtr wrap_variant_nullable(ColumnPtr col) const {
         const auto& var = assert_cast<const ColumnVariant&>(*col);
         if (var.is_null_root()) {
-            return make_nullable(col, true);
+            const size_t rows = col->size();
+            auto null_map = ColumnUInt8::create(rows, 1);
+            auto& nm = null_map->get_data();
+            bool has_data_source = false;
+            for (const auto& entry : var.get_subcolumns()) {
+                if (entry->path.empty()) {
+                    continue; // the (null/absent) root itself
+                }
+                has_data_source = true;
+                for (size_t r = 0; r < rows; ++r) {
+                    if (nm[r] && !entry->data.is_null_at(r)) {
+                        nm[r] = 0;
+                    }
+                }
+            }
+            auto mark_map_rows = [&](const ColumnPtr& serialized_map) {
+                if (serialized_map.get() == nullptr) {
+                    return;
+                }
+                const auto& map = assert_cast<const ColumnMap&>(*serialized_map);
+                const auto& offsets = map.get_offsets();
+                if (offsets.size() < rows) {
+                    return;
+                }
+                for (size_t r = 0; r < rows; ++r) {
+                    if (nm[r] && offsets[r] > offsets[ssize_t(r) - 1]) {
+                        has_data_source = true;
+                        nm[r] = 0;
+                    }
+                }
+            };
+            mark_map_rows(var.get_sparse_column());
+            if (var.enable_doc_mode()) {
+                mark_map_rows(var.get_doc_value_column());
+            }
+            if (!has_data_source) {
+                return make_nullable(col, true);
+            }
+            return ColumnNullable::create(col, std::move(null_map));
         }
         if (var.is_scalar_variant() && is_column_nullable(*var.get_root())) {
             const auto* nullable = assert_cast<const ColumnNullable*>(var.get_root().get());
@@ -323,8 +371,21 @@ private:
         target_ptr->set_num_rows(src_ptr->size());
     }
 
-    static Status get_element_column(const ColumnVariant& src, const ColumnPtr& index_column,
+    static Status get_element_column(const ColumnVariant& src_in, const ColumnPtr& index_column,
                                      ColumnPtr* result) {
+        // The parquet lazy-read predicate path (RowGroupReader::_do_lazy_read →
+        // execute_conjuncts) evaluates element access on a just-read,
+        // NON-finalized ColumnVariant; the scalar branches below call
+        // get_root()/get_root_type(), which throw "Subcolumn is not finalized"
+        // on such input (the hierarchical branch already clones finalized).
+        // Finalize up-front — a no-op copy is avoided when already finalized.
+        ColumnPtr finalized_holder;
+        const ColumnVariant* src_ptr = &src_in;
+        if (!src_in.is_finalized()) {
+            finalized_holder = src_in.clone_finalized();
+            src_ptr = assert_cast<const ColumnVariant*>(finalized_holder.get());
+        }
+        const ColumnVariant& src = *src_ptr;
         std::string field_name = index_column->get_data_at(0).to_string();
         if (src.empty()) {
             *result = ColumnVariant::create(src.max_subcolumns_count(), src.enable_doc_mode());
@@ -386,8 +447,7 @@ private:
                     continue;
                 }
                 std::string json_text = jsonb_to_json.to_json_string(data.data, data.size);
-                if (!extract_from_document(parser,
-                                           StringRef(json_text.data(), json_text.size()),
+                if (!extract_from_document(parser, StringRef(json_text.data(), json_text.size()),
                                            parsed_paths, col_str)) {
                     VLOG_DEBUG << "failed to extract from jsonb-rooted variant row, field "
                                << field_name;
