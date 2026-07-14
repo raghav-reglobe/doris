@@ -27,6 +27,7 @@
 
 #include "common/status.h"
 #include "core/assert_cast.h"
+#include "util/jsonb_utils.h"
 #include "core/block/block.h"
 #include "core/column/column.h"
 #include "core/column/column_nullable.h"
@@ -290,6 +291,46 @@ private:
             *result = ColumnVariant::create(src.max_subcolumns_count(), src.enable_doc_mode(), type,
                                             std::move(result_column));
             (*result)->assert_mutable()->finalize();
+            return Status::OK();
+        } else if (src.is_scalar_variant() &&
+                   src.get_root_type()->get_primitive_type() == TYPE_JSONB) {
+            // Iceberg/parquet variant readers produce scalar JSONB roots
+            // (parquet_variant_reader make_jsonb_field) with NO subcolumns or
+            // sparse/doc maps, so the extraction machinery below finds nothing
+            // and element access silently returned NULL for every key while
+            // CAST(col AS STRING) (plain root serialization) worked. Serialize
+            // each row's JSONB to JSON text and reuse the simdjson extraction
+            // path — same output shape as the STRING-root branch above.
+            auto type = std::make_shared<DataTypeString>();
+            MutableColumnPtr result_column = type->create_column();
+            const ColumnString& docs =
+                    *assert_cast<const ColumnString*>(remove_nullable(src.get_root()).get());
+            simdjson::ondemand::parser parser;
+            std::vector<JsonPath> parsed_paths;
+            if (field_name.empty() || field_name[0] != '$') {
+                field_name = "$." + field_name;
+            }
+            JsonFunctions::parse_json_paths(field_name, &parsed_paths);
+            ColumnString* col_str = static_cast<ColumnString*>(result_column.get());
+            JsonbToJson jsonb_to_json;
+            for (size_t i = 0; i < docs.size(); ++i) {
+                StringRef data = docs.get_data_at(i);
+                if (data.size == 0) {
+                    result_column->insert_default();
+                    continue;
+                }
+                std::string json_text = jsonb_to_json.to_json_string(data.data, data.size);
+                if (!extract_from_document(parser,
+                                           StringRef(json_text.data(), json_text.size()),
+                                           parsed_paths, col_str)) {
+                    VLOG_DEBUG << "failed to extract from jsonb-rooted variant row, field "
+                               << field_name;
+                    result_column->insert_default();
+                }
+            }
+            *result = ColumnVariant::create(src.max_subcolumns_count(), src.enable_doc_mode(), type,
+                                            std::move(result_column));
+            (*result)->assume_mutable()->finalize();
             return Status::OK();
         } else {
             auto mutable_src = src.clone_finalized();
