@@ -42,6 +42,17 @@ else()
         set(DYNAMIC_ARCH ON CACHE BOOL "Enable runtime CPU detection in OpenBLAS")
     endif ()
 endif ()
+# Pin OpenBLAS to generic ARMV8 (NEON) on aarch64. DYNAMIC_ARCH is disabled on
+# ARM (above), so OpenBLAS core-detects the BUILD HOST. On SVE-capable hosts
+# (AWS Graviton3/4 = Neoverse V1/V2) it selects the *_sve.c kernels, but the
+# OpenBLAS cmake+clang path does not add the required -march=...+sve to those
+# kernel files -> "SVE vector type 'svbool_t' cannot be used in a target
+# without sve" compile errors. Generic ARMV8 matches what non-SVE build hosts
+# (e.g. Apple Silicon Docker) auto-detect and keeps the binary portable across
+# Graviton generations. Override with -DTARGET=<core> if ever needed.
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64" AND NOT DEFINED TARGET)
+    set(TARGET "ARMV8" CACHE STRING "OpenBLAS target core (pinned: no build-host SVE core detection)")
+endif ()
 # Set FAISS_ENABLE_GPU OFF before including FAISS to prevent CUDA language detection
 set(FAISS_ENABLE_GPU OFF CACHE BOOL "Enable GPU support in FAISS")
 # EXCLUDE_FROM_ALL so that binary in openblas is not installed.
