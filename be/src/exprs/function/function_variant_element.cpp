@@ -390,7 +390,7 @@ private:
             }
             *result = ColumnVariant::create(src.max_subcolumns_count(), src.enable_doc_mode(), type,
                                             std::move(result_column));
-            (*result)->assume_mutable()->finalize();
+            (*result)->assert_mutable()->finalize();
             return Status::OK();
         } else {
             auto mutable_src = src.clone_finalized();
