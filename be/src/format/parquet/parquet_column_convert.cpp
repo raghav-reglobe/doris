@@ -71,14 +71,14 @@ public:
         using TimeType = typename PrimitiveTypeTraits<TYPE_TIMEV2>::CppType;
 
         ColumnPtr src_col = remove_nullable(src_physical_col);
-        MutableColumnPtr dst_col = remove_nullable(src_logical_column)->assume_mutable();
+        IColumn* dst_col = get_mutable_inner_column(src_logical_column);
 
         size_t rows = src_col->size();
         size_t start_idx = dst_col->size();
         dst_col->resize(start_idx + rows);
 
         const auto& src_data = static_cast<const SrcColumnType*>(src_col.get())->get_data();
-        auto& data = static_cast<ColumnTimeV2*>(dst_col.get())->get_data();
+        auto& data = assert_cast<ColumnTimeV2&>(*dst_col).get_data();
 
         for (int i = 0; i < rows; i++) {
             data[start_idx + i] =

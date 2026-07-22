@@ -1810,7 +1810,8 @@ static Status append_variant_struct_rows_to_column(
 
     MutableColumnPtr variant_column_ptr;
     NullMap* null_map_ptr = nullptr;
-    auto mutable_column = doris_column->assume_mutable();
+    doris_column = IColumn::mutate(std::move(doris_column));
+    auto mutable_column = doris_column->assert_mutable();
     if (doris_column->is_nullable()) {
         auto* nullable_column = assert_cast<ColumnNullable*>(mutable_column.get());
         variant_column_ptr = nullable_column->get_nested_column_ptr();
@@ -2642,8 +2643,9 @@ Status ArrayColumnReader::read_column_data(
     fill_array_offset(_field_schema, offsets_data, null_map_ptr, _element_reader->get_rep_level(),
                       _element_reader->get_def_level());
     if (_offset_only && offsets_data.back() > element_column->size()) {
-        auto mutable_element_column = element_column->assume_mutable();
-        mutable_element_column->insert_many_defaults(offsets_data.back() - element_column->size());
+        auto mutable_element_column = IColumn::mutate(std::move(element_column));
+        mutable_element_column->insert_many_defaults(offsets_data.back() -
+                                                     mutable_element_column->size());
         element_column = std::move(mutable_element_column);
     }
     DCHECK_EQ(element_column->size(), offsets_data.back());
