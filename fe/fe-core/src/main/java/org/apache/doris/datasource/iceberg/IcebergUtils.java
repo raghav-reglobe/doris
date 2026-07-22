@@ -716,8 +716,6 @@ public class IcebergUtils {
                                 icebergTypeToDorisType(x.type(), enableMappingVarbinary, enableMappingTimestampTz)))
                         .collect(Collectors.toCollection(ArrayList::new));
                 return new StructType(nestedTypes);
-            case VARIANT:
-                return Type.UNSUPPORTED;
             default:
                 throw new IllegalArgumentException("Cannot transform unknown type: " + type);
         }
