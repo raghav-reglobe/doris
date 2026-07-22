@@ -133,7 +133,8 @@ pid_t get_current_tid() {
     return static_cast<pid_t>(syscall(SYS_gettid));
 }
 
-void append_frame(SignalContextCapture* capture, uintptr_t pc) {
+// Only referenced under the x86_64 unwind path below; unused (-Werror) on aarch64.
+[[maybe_unused]] void append_frame(SignalContextCapture* capture, uintptr_t pc) {
     if (pc == 0 || capture->size >= capture->frame_pointers.size()) {
         return;
     }
