@@ -753,7 +753,12 @@ public class FrontendServiceImpl implements FrontendService.Iface {
                             TTableStatus status = new TTableStatus();
                             status.setName(table.getName());
                             status.setType(table.getMysqlType());
-                            status.setComment(table.getComment());
+                            if (needTableStatusColumn(requiredColumns, "TABLE_COMMENT")) {
+                                // For some external tables (e.g. Iceberg), getComment() loads the
+                                // full table metadata from the remote catalog — skip it unless the
+                                // query actually projects TABLE_COMMENT, same as the other columns.
+                                status.setComment(table.getComment());
+                            }
                             if (needTableStatusColumn(requiredColumns, "ENGINE")) {
                                 status.setEngine(table.getEngine());
                             }
