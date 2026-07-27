@@ -35,12 +35,22 @@ import org.apache.doris.qe.ConnectContext;
 public class SetPassVarOp extends SetVarOp {
     private UserIdentity userIdent;
     private PassVar passVar;
+    // MySQL-compatible "RETAIN CURRENT PASSWORD": keep the previous password
+    // valid as the secondary password (dual password). Unprivileged on one's
+    // OWN account (like SET PASSWORD itself), which is what lets a service
+    // account rotate its own credential with an overlap window and no master.
+    private final boolean retainCurrentPassword;
 
     // The password in parameter is a hashed password.
     public SetPassVarOp(UserIdentity userIdent, PassVar passVar) {
+        this(userIdent, passVar, false);
+    }
+
+    public SetPassVarOp(UserIdentity userIdent, PassVar passVar, boolean retainCurrentPassword) {
         super(SetType.DEFAULT);
         this.userIdent = userIdent;
         this.passVar = passVar;
+        this.retainCurrentPassword = retainCurrentPassword;
     }
 
     @Override
@@ -81,7 +91,7 @@ public class SetPassVarOp extends SetVarOp {
 
     @Override
     public void run(ConnectContext ctx) throws Exception {
-        ctx.getEnv().getAuth().setPassword(userIdent, passVar.getScrambled());
+        ctx.getEnv().getAuth().setPassword(userIdent, passVar.getScrambled(), retainCurrentPassword);
     }
 
     @Override
@@ -91,6 +101,9 @@ public class SetPassVarOp extends SetVarOp {
             sb.append(" FOR ").append(userIdent);
         }
         sb.append(" = '*XXX'");
+        if (retainCurrentPassword) {
+            sb.append(" RETAIN CURRENT PASSWORD");
+        }
         return sb.toString();
     }
 
