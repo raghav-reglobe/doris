@@ -1032,10 +1032,18 @@ public class Auth implements Writable {
                 false /* set by resolver */, false);
     }
 
+    // MySQL-compatible SET PASSWORD ... RETAIN CURRENT PASSWORD: keep the
+    // previous password valid as the secondary password.
+    public void setPassword(UserIdentity userIdentity, byte[] password,
+            boolean retainCurrentPassword) throws DdlException {
+        setPasswordInternal(userIdentity, password, null, true /* err on non exist */,
+                false /* set by resolver */, retainCurrentPassword, false);
+    }
+
     public void replaySetPassword(PrivInfo info) {
         try {
             setPasswordInternal(info.getUserIdent(), info.getPasswd(), null, true /* err on non exist */,
-                    false /* set by resolver */, true);
+                    false /* set by resolver */, info.isRetainPasswd(), true);
         } catch (DdlException e) {
             LOG.error("should not happened", e);
         }
@@ -1043,6 +1051,13 @@ public class Auth implements Writable {
 
     public void setPasswordInternal(UserIdentity userIdent, byte[] password, UserIdentity domainUserIdent,
             boolean errOnNonExist, boolean setByResolver, boolean isReplay) throws DdlException {
+        setPasswordInternal(userIdent, password, domainUserIdent, errOnNonExist, setByResolver,
+                false /* retain current password */, isReplay);
+    }
+
+    public void setPasswordInternal(UserIdentity userIdent, byte[] password, UserIdentity domainUserIdent,
+            boolean errOnNonExist, boolean setByResolver, boolean retainCurrentPassword,
+            boolean isReplay) throws DdlException {
         Preconditions.checkArgument(!setByResolver || domainUserIdent != null, setByResolver + ", " + domainUserIdent);
         writeLock();
         try {
@@ -1051,21 +1066,40 @@ public class Auth implements Writable {
                     ErrorReport.reportDdlException(ErrorCode.ERR_CREDENTIALS_CONTRADICT_TO_HISTORY,
                             userIdent.getQualifiedUser(), userIdent.getHost());
                 }
+                if (retainCurrentPassword) {
+                    // MySQL-compatible RETAIN CURRENT PASSWORD constraint:
+                    // "If you specify RETAIN CURRENT PASSWORD for an account
+                    // that has an empty primary password, the statement
+                    // fails." Checked here (not only at analysis) so every
+                    // caller is covered; skipped on replay (the journal
+                    // already passed this check). NB an EMPTY NEW password is
+                    // NOT an error — it empties the secondary as well (MySQL
+                    // semantics, handled in UserManager.setPassword).
+                    User user = userManager.getUserByUserIdentity(userIdent);
+                    if (user == null || user.getPassword() == null
+                            || user.getPassword().getPassword() == null
+                            || user.getPassword().getPassword().length == 0) {
+                        throw new DdlException(
+                                "Current password cannot be retained for user " + userIdent
+                                        + " because it does not exist or is empty");
+                    }
+                }
             }
-            userManager.setPassword(userIdent, password, errOnNonExist);
+            userManager.setPassword(userIdent, password, errOnNonExist, retainCurrentPassword);
             if (password != null) {
                 // save password to password history
                 passwdPolicyManager.updatePassword(userIdent, password);
             }
 
             if (!isReplay) {
-                PrivInfo info = new PrivInfo(userIdent, null, password, null, null);
+                PrivInfo info = new PrivInfo(userIdent, null, password, null, null, retainCurrentPassword);
                 Env.getCurrentEnv().getEditLog().logSetPassword(info);
             }
         } finally {
             writeUnlock();
         }
-        LOG.info("finished to set password for {}. is replay: {}", userIdent, isReplay);
+        LOG.info("finished to set password for {}. is replay: {}, retain current: {}",
+                userIdent, isReplay, retainCurrentPassword);
     }
 
     public void setLdapPassword(String ldapPassword) {
@@ -1926,13 +1960,16 @@ public class Auth implements Writable {
 
     public void alterUser(AlterUserInfo info) throws DdlException {
         alterUserInternal(info.isIfExist(), info.getOpType(), info.getUserIdent(), info.getPassword(),
-                null, info.getPasswordOptions(), info.getComment(), false);
+                null, info.getPasswordOptions(), info.getComment(), info.isRetainCurrentPassword(), false);
     }
 
     public void replayAlterUser(AlterUserOperationLog log) {
         try {
+            // retainCurrentPassword is always false here: the SET_PASSWORD
+            // branch (the only one it applies to) journals via
+            // logSetPassword/PrivInfo, which carries the flag itself.
             alterUserInternal(true, log.getOp(), log.getUserIdent(), log.getPassword(), log.getRole(),
-                    log.getPasswordOptions(), log.getComment(), true);
+                    log.getPasswordOptions(), log.getComment(), false, true);
         } catch (DdlException e) {
             LOG.error("should not happen", e);
         }
@@ -1940,7 +1977,7 @@ public class Auth implements Writable {
 
     private void alterUserInternal(boolean ifExists, AlterUserOpType opType, UserIdentity userIdent, byte[] password,
                                    String role, PasswordOptions passwordOptions, String comment,
-                                   boolean isReplay) throws DdlException {
+                                   boolean retainCurrentPassword, boolean isReplay) throws DdlException {
         writeLock();
         try {
             if (!doesUserExist(userIdent)) {
@@ -1951,7 +1988,12 @@ public class Auth implements Writable {
             }
             switch (opType) {
                 case SET_PASSWORD:
-                    setPasswordInternal(userIdent, password, null, false, false, isReplay);
+                    setPasswordInternal(userIdent, password, null, false, false, retainCurrentPassword, isReplay);
+                    break;
+                case DISCARD_OLD_PASSWORD:
+                    // MySQL-compatible "ALTER USER ... DISCARD OLD PASSWORD":
+                    // evict the retained secondary password early.
+                    userManager.discardOldPassword(userIdent, true);
                     break;
                 case SET_ROLE:
                     setRoleToUser(userIdent, role);

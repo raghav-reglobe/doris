@@ -25,5 +25,10 @@ public enum AlterUserOpType {
     LOCK_ACCOUNT,
     UNLOCK_ACCOUNT,
     MODIFY_COMMENT,
-    SET_TLS_REQUIRE
+    SET_TLS_REQUIRE,
+    // MySQL-compatible "DISCARD OLD PASSWORD": evict the retained secondary
+    // password. NB: journaled via OP_ALTER_USER — all FEs must run a version
+    // that knows this value before it is first executed (standard rolling
+    // upgrade order: masters last).
+    DISCARD_OLD_PASSWORD
 }

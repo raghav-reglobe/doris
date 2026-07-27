@@ -28,6 +28,7 @@ import org.apache.doris.common.PatternMatcherException;
 import org.apache.doris.common.io.Text;
 import org.apache.doris.common.io.Writable;
 import org.apache.doris.common.lock.MonitoredReentrantReadWriteLock;
+import org.apache.doris.metric.MetricRepo;
 import org.apache.doris.mysql.MysqlPassword;
 import org.apache.doris.persist.gson.GsonUtils;
 
@@ -144,7 +145,8 @@ public class UserManager implements Writable {
                 continue;
             }
             UserIdentity curUser = user.getDomainUserIdentity();
-            if (comparePassword(user.getPassword(), remotePasswd, randomString, remotePasswdStr, plain)) {
+            if (matchUserPassword(user, remoteUser + "@" + remoteHost,
+                    remotePasswd, randomString, remotePasswdStr, plain)) {
                 passwdPolicyMgr.checkAccountLockedAndPasswordExpiration(curUser);
                 if (currentUser != null) {
                     currentUser.add(curUser);
@@ -175,7 +177,7 @@ public class UserManager implements Writable {
                     hasRemotePasswd(plain, remotePasswd));
         }
         UserIdentity currentIdentity = user.getDomainUserIdentity();
-        if (comparePassword(user.getPassword(), remotePasswd, randomString, remotePasswdStr, plain)) {
+        if (matchUserPassword(user, userIdentity.toString(), remotePasswd, randomString, remotePasswdStr, plain)) {
             passwdPolicyMgr.checkAccountLockedAndPasswordExpiration(currentIdentity);
             if (currentUser != null) {
                 currentUser.add(currentIdentity);
@@ -211,13 +213,36 @@ public class UserManager implements Writable {
         return remotePasswd.length == 0 ? "NO" : "YES";
     }
 
-    private boolean comparePassword(Password curUserPassword, byte[] remotePasswd,
+    /**
+     * Try the primary password, then the retained secondary one
+     * (MySQL-compatible dual password: "RETAIN CURRENT PASSWORD"). A match on
+     * the secondary slot is logged and counted so operators can tell when all
+     * consumers have converged on the new password.
+     */
+    private boolean matchUserPassword(User user, String userDescription, byte[] remotePasswd,
+            byte[] randomString, String remotePasswdStr, boolean plain) {
+        if (comparePassword(user.getPassword().getPassword(), remotePasswd, randomString, remotePasswdStr, plain)) {
+            return true;
+        }
+        if (user.getPassword().hasSecondaryPassword()
+                && comparePassword(user.getPassword().getSecondaryPassword(),
+                        remotePasswd, randomString, remotePasswdStr, plain)) {
+            LOG.info("user {} authenticated with retained secondary password", userDescription);
+            if (MetricRepo.isInit) {
+                MetricRepo.COUNTER_SECONDARY_PASSWORD_AUTH.increase(1L);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private boolean comparePassword(byte[] savedPassword, byte[] remotePasswd,
             byte[] randomString, String remotePasswdStr, boolean plain) {
         // check password
         if (plain) {
-            return MysqlPassword.checkPlainPass(curUserPassword.getPassword(), remotePasswdStr);
+            return MysqlPassword.checkPlainPass(savedPassword, remotePasswdStr);
         } else {
-            byte[] saltPassword = MysqlPassword.getSaltFromPassword(curUserPassword.getPassword());
+            byte[] saltPassword = MysqlPassword.getSaltFromPassword(savedPassword);
             // when the length of password is zero, the user has no password
             return ((remotePasswd.length == saltPassword.length)
                     && (remotePasswd.length == 0
@@ -351,6 +376,21 @@ public class UserManager implements Writable {
     }
 
     public void setPassword(UserIdentity userIdentity, byte[] password, boolean errOnNonExist) throws DdlException {
+        setPassword(userIdentity, password, errOnNonExist, false);
+    }
+
+    /**
+     * Set the user's password, with MySQL-compatible dual password semantics:
+     * with {@code retainCurrent} ("RETAIN CURRENT PASSWORD") the previous
+     * primary password becomes the secondary password and remains valid for
+     * authentication; without it an existing secondary password remains
+     * UNCHANGED (MySQL: "If an account has a secondary password and you
+     * change its primary password without specifying RETAIN CURRENT PASSWORD,
+     * the secondary password remains unchanged."). Setting an EMPTY password
+     * empties the secondary password as well, even with retain (also MySQL).
+     */
+    public void setPassword(UserIdentity userIdentity, byte[] password, boolean errOnNonExist,
+            boolean retainCurrent) throws DdlException {
         User user = getUserByUserIdentity(userIdentity);
         if (user == null) {
             if (errOnNonExist) {
@@ -358,7 +398,37 @@ public class UserManager implements Writable {
             }
             return;
         }
+        Password oldPassword = user.getPassword();
+        byte[] carried;
+        if (password == null || password.length == 0) {
+            // an empty new password empties the secondary as well, even with
+            // RETAIN CURRENT PASSWORD (MySQL semantics)
+            carried = null;
+        } else if (retainCurrent) {
+            carried = oldPassword == null ? null : oldPassword.getPassword();
+        } else {
+            carried = oldPassword == null ? null : oldPassword.getSecondaryPassword();
+        }
         user.setPassword(password);
+        user.getPassword().setSecondaryPassword(carried);
+    }
+
+    /**
+     * MySQL-compatible "ALTER USER ... DISCARD OLD PASSWORD": drop the
+     * retained secondary password. A user without one is a silent no-op
+     * (MySQL behavior).
+     */
+    public void discardOldPassword(UserIdentity userIdentity, boolean errOnNonExist) throws DdlException {
+        User user = getUserByUserIdentity(userIdentity);
+        if (user == null) {
+            if (errOnNonExist) {
+                throw new DdlException("user " + userIdentity + " does not exist");
+            }
+            return;
+        }
+        if (user.getPassword() != null) {
+            user.getPassword().setSecondaryPassword(null);
+        }
     }
 
     public void getAllDomains(Set<String> allDomains) {
