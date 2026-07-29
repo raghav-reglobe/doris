@@ -293,7 +293,15 @@ void ColumnVariant::Subcolumn::insert(Field field, FieldInfo info) {
 
     if (type_changed) {
         Field new_field;
-        convert_field_to_type(field, *least_common_type.get(), &new_field);
+        // decimal Fields carry no scale — pass the source type (built from
+        // the FieldInfo precision/scale) so a decimal→jsonb conversion can
+        // place the digits
+        DataTypePtr from_type;
+        if (info.scale >= 0 && is_decimal(from_type_id)) {
+            from_type = create_array_of_type(from_type_id, from_dim, is_nullable, info.precision,
+                                             info.scale);
+        }
+        convert_field_to_type(field, *least_common_type.get(), &new_field, from_type.get());
         field = new_field;
     }
     ++num_rows;
