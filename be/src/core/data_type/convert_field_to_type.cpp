@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "common/cast_set.h"
+#include "common/consts.h"
 #include "common/exception.h"
 #include "common/status.h"
 #include "core/accurate_comparison.h"
@@ -176,6 +177,12 @@ public:
 
 class FieldVisitorToJsonb : public StaticVisitor<void> {
 public:
+    FieldVisitorToJsonb() = default;
+    // Decimal Fields do not carry their scale, so a caller that knows the
+    // source decimal scale (e.g. from the source DataType, or from the
+    // per-entry scale of a VariantMap) must pass it here; -1 = unknown.
+    explicit FieldVisitorToJsonb(int scale) : scale_(scale) {}
+
     void operator()(const Null& x, JsonbWriter* writer) const { writer->writeNull(); }
     void operator()(const DateV2Value<DateTimeV2ValueType>& x, JsonbWriter* writer) const {
         writer->writeInt64(*(UInt64*)&x);
@@ -216,47 +223,120 @@ public:
     void operator()(const Array& x, JsonbWriter* writer) const;
 
     void operator()(const Struct& x, JsonbWriter* writer) const {
-        throw doris::Exception(doris::ErrorCode::NOT_IMPLEMENTED_ERROR, "Not implemeted");
+        // a Struct Field carries no field names, so it cannot be rendered
+        // as a jsonb object
+        throw doris::Exception(doris::ErrorCode::NOT_IMPLEMENTED_ERROR,
+                               "convert Struct field to jsonb is not implemented");
     }
     void operator()(const Decimal32& x, JsonbWriter* writer) const {
-        throw doris::Exception(doris::ErrorCode::NOT_IMPLEMENTED_ERROR, "Not implemeted");
+        write_decimal(x, BeConsts::MAX_DECIMAL32_PRECISION, writer);
     }
     void operator()(const Decimal64& x, JsonbWriter* writer) const {
-        throw doris::Exception(doris::ErrorCode::NOT_IMPLEMENTED_ERROR, "Not implemeted");
+        write_decimal(x, BeConsts::MAX_DECIMAL64_PRECISION, writer);
     }
     void operator()(const DecimalV2Value& x, JsonbWriter* writer) const {
-        throw doris::Exception(doris::ErrorCode::NOT_IMPLEMENTED_ERROR, "Not implemeted");
+        // DecimalV2 has a fixed scale of 9, independent of scale_
+        writer->writeDecimal(Decimal128V3(x.value()), BeConsts::MAX_DECIMALV2_PRECISION,
+                             BeConsts::MAX_DECIMALV2_SCALE);
     }
     void operator()(const Decimal128V3& x, JsonbWriter* writer) const {
-        throw doris::Exception(doris::ErrorCode::NOT_IMPLEMENTED_ERROR, "Not implemeted");
+        write_decimal(x, BeConsts::MAX_DECIMAL128_PRECISION, writer);
     }
     void operator()(const Decimal256& x, JsonbWriter* writer) const {
-        throw doris::Exception(doris::ErrorCode::NOT_IMPLEMENTED_ERROR, "Not implemeted");
+        write_decimal(x, BeConsts::MAX_DECIMAL256_PRECISION, writer);
     }
     void operator()(const doris::QuantileState& x, JsonbWriter* writer) const {
-        throw doris::Exception(doris::ErrorCode::NOT_IMPLEMENTED_ERROR, "Not implemeted");
+        throw doris::Exception(doris::ErrorCode::NOT_IMPLEMENTED_ERROR,
+                               "convert QuantileState field to jsonb is not implemented");
     }
     void operator()(const HyperLogLog& x, JsonbWriter* writer) const {
-        throw doris::Exception(doris::ErrorCode::NOT_IMPLEMENTED_ERROR, "Not implemeted");
+        throw doris::Exception(doris::ErrorCode::NOT_IMPLEMENTED_ERROR,
+                               "convert HyperLogLog field to jsonb is not implemented");
     }
     void operator()(const BitmapValue& x, JsonbWriter* writer) const {
-        throw doris::Exception(doris::ErrorCode::NOT_IMPLEMENTED_ERROR, "Not implemeted");
+        throw doris::Exception(doris::ErrorCode::NOT_IMPLEMENTED_ERROR,
+                               "convert Bitmap field to jsonb is not implemented");
     }
-    void operator()(const VariantMap& x, JsonbWriter* writer) const {
-        throw doris::Exception(doris::ErrorCode::NOT_IMPLEMENTED_ERROR, "Not implemeted");
-    }
+    // A VariantMap holds leaf values keyed by their (possibly nested) paths
+    // — the shape the Parquet VARIANT reader produces for objects nested in
+    // arrays. Rendered as a jsonb object tree.
+    void operator()(const VariantMap& x, JsonbWriter* writer) const;
     void operator()(const Map& x, JsonbWriter* writer) const {
-        throw doris::Exception(doris::ErrorCode::NOT_IMPLEMENTED_ERROR, "Not implemeted");
+        throw doris::Exception(doris::ErrorCode::NOT_IMPLEMENTED_ERROR,
+                               "convert Map field to jsonb is not implemented");
     }
+
+private:
+    template <typename T>
+    void write_decimal(const T& x, uint32_t max_precision, JsonbWriter* writer) const {
+        if (scale_ < 0) {
+            // without the scale the digits cannot be placed; refuse loudly
+            // rather than render a wrong number
+            throw doris::Exception(doris::ErrorCode::NOT_IMPLEMENTED_ERROR,
+                                   "convert decimal field to jsonb requires the source scale");
+        }
+        writer->writeDecimal(x, max_precision, static_cast<uint32_t>(scale_));
+    }
+
+    int scale_ = -1;
 };
 
 void FieldVisitorToJsonb::operator()(const Array& x, JsonbWriter* writer) const {
     const size_t size = x.size();
     writer->writeStartArray();
     for (size_t i = 0; i < size; ++i) {
-        dispatch([writer](const auto& value) { FieldVisitorToJsonb()(value, writer); }, x[i]);
+        // scale_ propagates: an array of decimals shares one element scale
+        dispatch([writer, this](const auto& value) { FieldVisitorToJsonb {scale_}(value, writer); },
+                 x[i]);
     }
     writer->writeEndArray();
+}
+
+namespace {
+// Render a sorted [begin, end) range of VariantMap entries that share their
+// first `depth` path parts as one jsonb object. std::map<PathInData, ...>
+// orders part-wise (PathInData::operator< compares parts, not the dotted
+// string), so entries sharing a path prefix are always contiguous.
+void write_variant_map_object(VariantMap::const_iterator begin, VariantMap::const_iterator end,
+                              size_t depth, JsonbWriter* writer) {
+    writer->writeStartObject();
+    auto it = begin;
+    while (it != end) {
+        const PathInData::Parts& parts = it->first.get_parts();
+        if (parts.size() <= depth) {
+            // a value AT the group prefix alongside children below it —
+            // ambiguous paths are rejected upstream, so this is corruption
+            throw doris::Exception(doris::ErrorCode::INTERNAL_ERROR,
+                                   "ambiguous variant path while converting to jsonb: {}",
+                                   it->first.get_path());
+        }
+        std::string_view key = parts[depth].key;
+        auto group_end = std::next(it);
+        while (group_end != end) {
+            const PathInData::Parts& group_parts = group_end->first.get_parts();
+            if (group_parts.size() <= depth || group_parts[depth].key != key) {
+                break;
+            }
+            ++group_end;
+        }
+        writer->writeKey(key.data(), cast_set<uint8_t>(key.size()));
+        if (std::next(it) == group_end && parts.size() == depth + 1) {
+            // leaf: each VariantMap entry carries its own decimal scale
+            const FieldWithDataType& leaf = it->second;
+            dispatch([writer,
+                      &leaf](const auto& value) { FieldVisitorToJsonb(leaf.scale)(value, writer); },
+                     leaf.field);
+        } else {
+            write_variant_map_object(it, group_end, depth + 1, writer);
+        }
+        it = group_end;
+    }
+    writer->writeEndObject();
+}
+} // namespace
+
+void FieldVisitorToJsonb::operator()(const VariantMap& x, JsonbWriter* writer) const {
+    write_variant_map_object(x.begin(), x.end(), 0, writer);
 }
 
 struct ConvertNumeric {
@@ -719,8 +799,30 @@ void convert_field_to_typeImpl(const Field& src, const IDataType& type,
             *to = src;
             return;
         }
+        // decimal Fields carry no scale; recover it from the source type
+        // hint when the caller provided one (unwrapping nullable/array)
+        int scale = -1;
+        if (from_type_hint != nullptr) {
+            const IDataType* hint = from_type_hint;
+            while (true) {
+                if (const auto* nullable = typeid_cast<const DataTypeNullable*>(hint)) {
+                    hint = nullable->get_nested_type().get();
+                    continue;
+                }
+                if (const auto* array = typeid_cast<const DataTypeArray*>(hint)) {
+                    hint = array->get_nested_type().get();
+                    continue;
+                }
+                break;
+            }
+            if (is_decimal(hint->get_primitive_type())) {
+                scale = static_cast<int>(hint->get_scale());
+            }
+        }
         JsonbWriter writer;
-        dispatch([&writer](const auto& value) { FieldVisitorToJsonb()(value, &writer); }, src);
+        dispatch([&writer,
+                  scale](const auto& value) { FieldVisitorToJsonb {scale}(value, &writer); },
+                 src);
         *to = Field::create_field<TYPE_JSONB>(
                 JsonbField(writer.getOutput()->getBuffer(),
                            cast_set<UInt32, size_t, false>(writer.getOutput()->getSize())));

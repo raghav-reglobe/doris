@@ -24,12 +24,15 @@
 
 #include "core/data_type/data_type.h"
 #include "core/data_type/data_type_array.h"
+#include "core/data_type/data_type_decimal.h"
 #include "core/data_type/data_type_jsonb.h"
 #include "core/data_type/data_type_nullable.h"
 #include "core/field.h"
 #include "core/types.h"
 #include "core/value/jsonb_value.h"
+#include "util/json/path_in_data.h"
 #include "util/jsonb_document.h"
+#include "util/jsonb_utils.h"
 #include "util/jsonb_writer.h"
 
 namespace doris {
@@ -511,6 +514,143 @@ TEST_F(ConvertFieldToTypeTest, ConvertFieldToType_ErrorCases) {
                 },
                 doris::Exception);
     }
+}
+
+// A decimal Field converts to a jsonb decimal when the source scale is
+// known via the from-type hint (the Parquet VARIANT reader produces such
+// Fields for decimal4/decimal8/decimal16 values).
+TEST_F(ConvertFieldToTypeTest, ConvertFieldToType_DecimalToJsonb) {
+    DataTypeJsonb jsonb_type;
+
+    // 123.45 as decimal(9, 2)
+    Field decimal_field = Field::create_field<TYPE_DECIMAL32>(Decimal32(12345));
+    auto from_type = std::make_shared<DataTypeDecimal32>(9, 2);
+
+    Field result;
+    convert_field_to_type(decimal_field, jsonb_type, &result, from_type.get());
+    ASSERT_EQ(result.get_type(), PrimitiveType::TYPE_JSONB);
+
+    const auto& jsonb = result.get<TYPE_JSONB>();
+    const JsonbDocument* doc = nullptr;
+    ASSERT_TRUE(
+            JsonbDocument::checkAndCreateDocument(jsonb.get_value(), jsonb.get_size(), &doc).ok());
+    ASSERT_TRUE(doc->getValue()->isDecimal());
+
+    // without the scale the digits cannot be placed — must refuse, not
+    // render a wrong number
+    EXPECT_THROW(
+            {
+                Field no_hint_result;
+                convert_field_to_type(decimal_field, jsonb_type, &no_hint_result);
+            },
+            doris::Exception);
+}
+
+// An Array of decimals shares one element scale, recovered from the
+// (array-of-decimal) from-type hint and propagated to every element.
+TEST_F(ConvertFieldToTypeTest, ConvertFieldToType_DecimalArrayToJsonb) {
+    DataTypeJsonb jsonb_type;
+
+    Array arr;
+    arr.push_back(Field::create_field<TYPE_DECIMAL64>(Decimal64(100500)));
+    arr.push_back(Field::create_field<TYPE_DECIMAL64>(Decimal64(-42)));
+    Field array_field = Field::create_field<TYPE_ARRAY>(arr);
+    auto from_type = std::make_shared<DataTypeArray>(
+            make_nullable(std::make_shared<DataTypeDecimal64>(18, 3)));
+
+    Field result;
+    convert_field_to_type(array_field, jsonb_type, &result, from_type.get());
+    ASSERT_EQ(result.get_type(), PrimitiveType::TYPE_JSONB);
+
+    const auto& jsonb = result.get<TYPE_JSONB>();
+    const JsonbDocument* doc = nullptr;
+    ASSERT_TRUE(
+            JsonbDocument::checkAndCreateDocument(jsonb.get_value(), jsonb.get_size(), &doc).ok());
+    ASSERT_TRUE(doc->getValue()->isArray());
+}
+
+// A VariantMap (the Field shape the Parquet VARIANT reader produces for an
+// object nested in an array) renders as a jsonb object tree, rebuilding
+// nesting from the flattened paths; each leaf carries its own scale.
+TEST_F(ConvertFieldToTypeTest, FieldVisitorToJsonb_VariantMap) {
+    VariantMap map;
+
+    {
+        FieldWithDataType leaf;
+        leaf.field = Field::create_field<TYPE_STRING>(String("hello"));
+        map[PathInData("k1")] = std::move(leaf);
+    }
+    {
+        FieldWithDataType leaf;
+        leaf.field = Field::create_field<TYPE_BIGINT>(Int64(7));
+        map[PathInData("nested.a")] = std::move(leaf);
+    }
+    {
+        // 9.99 as decimal(9, 2) — the per-entry scale must be honored
+        FieldWithDataType leaf;
+        leaf.field = Field::create_field<TYPE_DECIMAL32>(Decimal32(999));
+        leaf.base_scalar_type_id = PrimitiveType::TYPE_DECIMAL32;
+        leaf.precision = 9;
+        leaf.scale = 2;
+        map[PathInData("nested.b")] = std::move(leaf);
+    }
+    {
+        FieldWithDataType leaf;
+        leaf.field = Field(); // null
+        map[PathInData("z")] = std::move(leaf);
+    }
+
+    Field variant_field = Field::create_field<TYPE_VARIANT>(std::move(map));
+
+    DataTypeJsonb jsonb_type;
+    Field result;
+    convert_field_to_type(variant_field, jsonb_type, &result);
+    ASSERT_EQ(result.get_type(), PrimitiveType::TYPE_JSONB);
+
+    const auto& jsonb = result.get<TYPE_JSONB>();
+    const JsonbDocument* doc = nullptr;
+    ASSERT_TRUE(
+            JsonbDocument::checkAndCreateDocument(jsonb.get_value(), jsonb.get_size(), &doc).ok());
+    ASSERT_TRUE(doc->getValue()->isObject());
+
+    std::string json = JsonbToJson::jsonb_to_json_string(jsonb.get_value(), jsonb.get_size());
+    EXPECT_NE(json.find("\"k1\""), std::string::npos) << json;
+    EXPECT_NE(json.find("\"hello\""), std::string::npos) << json;
+    EXPECT_NE(json.find("\"nested\""), std::string::npos) << json;
+    EXPECT_NE(json.find("\"a\""), std::string::npos) << json;
+    EXPECT_NE(json.find("7"), std::string::npos) << json;
+    EXPECT_NE(json.find("9.99"), std::string::npos) << json;
+    // the nested keys must NOT appear flattened at the top level
+    EXPECT_EQ(json.find("\"nested.a\""), std::string::npos) << json;
+}
+
+// An array of objects — the exact shape that failed reading unshredded
+// Parquet VARIANT data: Array elements holding TYPE_VARIANT (VariantMap)
+// Fields, folded to jsonb when the column's least common type collapses.
+TEST_F(ConvertFieldToTypeTest, FieldVisitorToJsonb_ArrayOfVariantMaps) {
+    Array arr;
+    for (int i = 0; i < 2; ++i) {
+        VariantMap element;
+        FieldWithDataType leaf;
+        leaf.field = Field::create_field<TYPE_BIGINT>(Int64(i));
+        element[PathInData("id")] = std::move(leaf);
+        arr.push_back(Field::create_field<TYPE_VARIANT>(std::move(element)));
+    }
+    Field array_field = Field::create_field<TYPE_ARRAY>(arr);
+
+    DataTypeJsonb jsonb_type;
+    Field result;
+    convert_field_to_type(array_field, jsonb_type, &result);
+    ASSERT_EQ(result.get_type(), PrimitiveType::TYPE_JSONB);
+
+    const auto& jsonb = result.get<TYPE_JSONB>();
+    const JsonbDocument* doc = nullptr;
+    ASSERT_TRUE(
+            JsonbDocument::checkAndCreateDocument(jsonb.get_value(), jsonb.get_size(), &doc).ok());
+    ASSERT_TRUE(doc->getValue()->isArray());
+
+    std::string json = JsonbToJson::jsonb_to_json_string(jsonb.get_value(), jsonb.get_size());
+    EXPECT_NE(json.find("\"id\""), std::string::npos) << json;
 }
 
 } // namespace doris
