@@ -1163,13 +1163,11 @@ public class SessionVariable implements Serializable, Writable {
             + "FileScanNode uses FileScannerV2 for supported query scans. Enabled by default.")
     public boolean enableFileScannerV2 = true;
 
-    @VarAttrDef.VarAttr(name = ENABLE_FILE_CACHE_FOR_INSERT_SOURCE, needForward = true, description = {
-            "开启后 INSERT ... SELECT / CTAS 的源表扫描使用普通文件缓存队列（不再强制 disposable 队列）。"
-                    + "适用于源扫描工作集与交互查询共享、且周期性重复读取的 ETL 场景。默认关闭（保持原有行为）",
+    @VarAttrDef.VarAttr(name = ENABLE_FILE_CACHE_FOR_INSERT_SOURCE, needForward = true, description =
             "When enabled, source scans of INSERT ... SELECT / CTAS use the normal file cache queue "
                     + "instead of being forced onto the disposable queue. Useful for recurring ETL whose "
                     + "source working set is shared with interactive queries and re-read every cycle. "
-                    + "Disabled by default (preserves existing behavior)."})
+                    + "Disabled by default (preserves existing behavior).")
     public boolean enableFileCacheForInsertSource = false;
 
     @VarAttrDef.VarAttr(name = LOCAL_EXCHANGE_FREE_BLOCKS_LIMIT)
