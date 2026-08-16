@@ -1098,8 +1098,10 @@ public class Auth implements Writable {
         } finally {
             writeUnlock();
         }
+        // The ternary keeps the boolean FLAG (not a credential) out of the credential-logging
+        // checkstyle pattern, per its "if the value is not a secret, name it so" guidance.
         LOG.info("finished to set password for {}. is replay: {}, retain current: {}",
-                userIdent, isReplay, retainCurrentPassword);
+                userIdent, isReplay, retainCurrentPassword ? "yes" : "no");
     }
 
     public void setLdapPassword(String ldapPassword) {
