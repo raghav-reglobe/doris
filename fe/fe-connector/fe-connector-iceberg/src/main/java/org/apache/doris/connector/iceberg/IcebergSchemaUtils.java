@@ -432,6 +432,16 @@ public final class IcebergSchemaUtils {
 
         TNestedField nestedField = new TNestedField();
         switch (type.typeId()) {
+            case VARIANT:
+                // VARIANT is a SCALAR LEAF in the BE schema dictionary, typed as such (legacy fe-core built
+                // the dict from Doris Columns, whose VariantType emits TPrimitiveType.VARIANT). Iceberg's
+                // VariantType is NOT a PrimitiveType subclass, so it reaches this non-primitive switch; the
+                // pre-fix default arm emitted a STRING placeholder — a silent read-path divergence from
+                // legacy (the BE parquet variant reader resolves the shredded subtree itself, so no nested
+                // TField is modeled, but the leaf type must say VARIANT).
+                columnType.setType(TPrimitiveType.VARIANT);
+                tField.setType(columnType);
+                return tField;
             case LIST: {
                 columnType.setType(TPrimitiveType.ARRAY);
                 Types.ListType listType = (Types.ListType) type;
