@@ -384,7 +384,9 @@ static Status parse_json_to_variant_map(const std::string& json, const PathInDat
             variant_util::parse_json_to_variant(*parsed_column, json_ref, nullptr, parse_config));
     Field parsed = (*parsed_column)[0];
     if (!parsed.is_null()) {
-        auto& parsed_values = parsed.get<TYPE_VARIANT>();
+        // TYPE_VARIANT's CppType is the VariantField wrapper since the V2 storage work; the V1
+        // ColumnVariant produced this Field in its transitional legacy (map) form.
+        auto& parsed_values = parsed.get<TYPE_VARIANT>().legacy_map();
         for (auto& [path, value] : parsed_values) {
             (*values)[append_path(prefix, path)] = std::move(value);
         }

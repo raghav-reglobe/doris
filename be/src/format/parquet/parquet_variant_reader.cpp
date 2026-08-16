@@ -385,7 +385,9 @@ Status parse_json_to_variant_map(std::string_view json, const PathInData& prefix
 
     PathInDataBuilder path;
     path.append(prefix.get_parts(), false);
-    for (auto& [parsed_path, value] : parsed.get<TYPE_VARIANT>()) {
+    // TYPE_VARIANT's CppType is the VariantField wrapper since the V2 storage work; V1 readers
+    // iterate its transitional legacy_map() (the VariantMap this reader itself constructed).
+    for (auto& [parsed_path, value] : parsed.get<TYPE_VARIANT>().legacy_map()) {
         path.append(parsed_path.get_parts(), false);
         (*values)[path.build()] = std::move(value);
         for (size_t i = 0; i < parsed_path.get_parts().size(); ++i) {

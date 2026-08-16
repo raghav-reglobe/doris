@@ -258,6 +258,14 @@ public:
                                "convert Bitmap field to jsonb is not implemented");
     }
     void operator()(const VariantField& x, JsonbWriter* writer) const {
+        // Transitional V1 bridge: the parquet variant reader builds VariantFields from legacy
+        // VariantMaps, and dispatch() now hands the wrapper (not the map) to this visitor —
+        // route legacy fields through the VariantMap fold below. Only a genuine V2-encoded
+        // field (no map form) is unimplemented here.
+        if (x.is_legacy()) {
+            (*this)(x.legacy_map(), writer);
+            return;
+        }
         throw doris::Exception(doris::ErrorCode::NOT_IMPLEMENTED_ERROR,
                                "convert VariantField field to jsonb is not implemented");
     }
