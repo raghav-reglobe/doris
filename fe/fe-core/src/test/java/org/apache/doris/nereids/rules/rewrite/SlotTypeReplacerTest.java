@@ -23,7 +23,7 @@ import org.apache.doris.catalog.MapType;
 import org.apache.doris.catalog.StructField;
 import org.apache.doris.catalog.StructType;
 import org.apache.doris.catalog.Type;
-import org.apache.doris.datasource.iceberg.IcebergExternalTable;
+import org.apache.doris.datasource.plugin.PluginDrivenExternalTable;
 import org.apache.doris.nereids.trees.expressions.Slot;
 import org.apache.doris.nereids.trees.expressions.SlotReference;
 import org.apache.doris.nereids.trees.plans.Plan;
@@ -161,7 +161,10 @@ class SlotTypeReplacerTest {
     }
 
     private LogicalFileScan newIcebergScan(Column column) {
-        IcebergExternalTable table = Mockito.mock(IcebergExternalTable.class);
+        // The field-id rewrite gate moved from the exact IcebergExternalTable class to the
+        // connector-agnostic PluginDrivenExternalTable nested-column-prune capability.
+        PluginDrivenExternalTable table = Mockito.mock(PluginDrivenExternalTable.class);
+        Mockito.when(table.supportsNestedColumnPrune()).thenReturn(true);
         Mockito.when(table.initSelectedPartitions(Mockito.any())).thenReturn(SelectedPartitions.NOT_PRUNED);
         Mockito.when(table.getFullSchema()).thenReturn(Collections.singletonList(column));
         Mockito.when(table.getName()).thenReturn("iceberg_tbl");
