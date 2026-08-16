@@ -244,12 +244,12 @@ public class FrontendServiceImplTest extends TestWithFeService {
 
             TListTableStatusResult result = impl.listTableStatus(params);
 
-            Assert.assertEquals(1, result.getTablesSize());
+            Assertions.assertEquals(1, result.getTablesSize());
             TTableStatus status = result.getTables().get(0);
             // comment is a required Thrift field: it must be set (empty placeholder),
             // and the response must pass Thrift validation without the lookup.
-            Assert.assertTrue(status.isSetComment());
-            Assert.assertEquals("", status.getComment());
+            Assertions.assertTrue(status.isSetComment());
+            Assertions.assertEquals("", status.getComment());
             status.validate();
             Mockito.verify(spyTable, Mockito.never()).getComment();
         } finally {
@@ -285,10 +285,10 @@ public class FrontendServiceImplTest extends TestWithFeService {
 
             TListTableStatusResult result = impl.listTableStatus(params);
 
-            Assert.assertEquals(1, result.getTablesSize());
+            Assertions.assertEquals(1, result.getTablesSize());
             TTableStatus status = result.getTables().get(0);
-            Assert.assertTrue(status.isSetComment());
-            Assert.assertEquals("projected comment", status.getComment());
+            Assertions.assertTrue(status.isSetComment());
+            Assertions.assertEquals("projected comment", status.getComment());
             status.validate();
             Mockito.verify(spyTable, Mockito.atLeastOnce()).getComment();
         } finally {
@@ -324,10 +324,10 @@ public class FrontendServiceImplTest extends TestWithFeService {
 
             TListTableStatusResult result = impl.listTableStatus(params);
 
-            Assert.assertEquals(1, result.getTablesSize());
+            Assertions.assertEquals(1, result.getTablesSize());
             TTableStatus status = result.getTables().get(0);
-            Assert.assertTrue(status.isSetComment());
-            Assert.assertEquals("legacy comment", status.getComment());
+            Assertions.assertTrue(status.isSetComment());
+            Assertions.assertEquals("legacy comment", status.getComment());
             status.validate();
             Mockito.verify(spyTable, Mockito.atLeastOnce()).getComment();
         } finally {
