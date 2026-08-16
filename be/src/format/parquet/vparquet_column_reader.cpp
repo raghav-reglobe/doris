@@ -2460,15 +2460,6 @@ ScalarColumnReader<IN_COLLECTION, OFFSET_INDEX>::convert_dict_column_to_string_c
 }
 
 template <bool IN_COLLECTION, bool OFFSET_INDEX>
-Status ScalarColumnReader<IN_COLLECTION, OFFSET_INDEX>::_try_load_dict_page(bool* loaded,
-                                                                            bool* has_dict) {
-    // _chunk_reader init will load first page header to check whether has dict page
-    *loaded = true;
-    *has_dict = _chunk_reader->has_dict();
-    return Status::OK();
-}
-
-template <bool IN_COLLECTION, bool OFFSET_INDEX>
 // Existing scalar read path handles page iteration, filtering, and conversion in one dispatch loop.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)
 Status ScalarColumnReader<IN_COLLECTION, OFFSET_INDEX>::read_column_data(

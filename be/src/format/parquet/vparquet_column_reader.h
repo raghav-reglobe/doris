@@ -369,7 +369,6 @@ private:
                                         std::vector<uint8_t>& nested_filter_map_data);
     Status read_nested_levels(FilterMap& filter_map, size_t batch_size, size_t* read_rows,
                               bool* eof) override;
-    Status _try_load_dict_page(bool* loaded, bool* has_dict);
 };
 
 class ArrayColumnReader : public ParquetColumnReader {
