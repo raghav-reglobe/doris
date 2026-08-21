@@ -139,7 +139,21 @@ public:
     void set_ready();
     void set_ready_to_read(int channel_id = 0) {
         DCHECK_LT(channel_id, _shared_state->source_deps.size()) << debug_string();
-        _shared_state->source_deps[channel_id]->set_ready();
+        // The DCHECK above is a no-op in Release. On the multi-fragment
+        // instant-finish teardown path a sink can reach eos and notify
+        // "ready to read" against a shared state whose source-side channel
+        // was never populated (or was torn down first by a [FINISHED]
+        // cancel), leaving source_deps empty/short — indexing it then
+        // dereferences a null Dependency (BE SIGSEGV @0x0 at the eos notify).
+        // An absent source dependency means no downstream reader is
+        // registered on this channel, so there is nothing to wake: skip.
+        if (channel_id >= _shared_state->source_deps.size()) {
+            return;
+        }
+        auto& dep = _shared_state->source_deps[channel_id];
+        if (dep) {
+            dep->set_ready();
+        }
     }
     void set_ready_to_write() {
         DCHECK_EQ(_shared_state->sink_deps.size(), 1) << debug_string();
