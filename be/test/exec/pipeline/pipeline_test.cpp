@@ -1289,4 +1289,28 @@ TEST_F(PipelineTest, QueryTaskProgressCountersSurviveReset) {
     EXPECT_EQ(ctrl2->get_finished_task_num(), 0);
 }
 
+// Regression: a sink reaching eos and calling set_ready_to_read() against a
+// shared state whose source-side channel was never populated (the
+// multi-fragment instant-finish [FINISHED]-teardown path) must not crash.
+// Before the guard, indexing an empty source_deps dereferenced a null
+// Dependency -> BE SIGSEGV @0x0 at the eos notify (aggregation_sink:999).
+TEST(DependencyReadyToReadTest, EmptySourceDepsIsSafe) {
+    auto shared_state = BasicSharedState::create_shared();
+    // No create_source_dependencies() call — source_deps stays empty, exactly
+    // the teardown-window state.
+    ASSERT_TRUE(shared_state->source_deps.empty());
+    auto* sink_dep = shared_state->create_sink_dependency(0, 0, "test_sink_dep");
+    ASSERT_NE(sink_dep, nullptr);
+    // Must be a no-op, not a crash.
+    EXPECT_NO_FATAL_FAILURE(sink_dep->set_ready_to_read());
+    EXPECT_NO_FATAL_FAILURE(sink_dep->set_ready_to_read(3)); // out-of-range channel
+
+    // With a populated channel it still wakes the registered reader.
+    shared_state->create_source_dependencies(1, 1, 1, "test_source_dep");
+    ASSERT_EQ(shared_state->source_deps.size(), 1);
+    EXPECT_FALSE(shared_state->source_deps[0]->ready());
+    sink_dep->set_ready_to_read();
+    EXPECT_TRUE(shared_state->source_deps[0]->ready());
+}
+
 } // namespace doris

@@ -995,7 +995,13 @@ Status AggSinkOperatorX::sink_impl(doris::RuntimeState* state, Block* in_block, 
         COUNTER_SET(local_state._hash_table_size_counter,
                     (int64_t)local_state.get_hash_table_size());
     }
-    if (eos) {
+    if (eos && !state->is_cancelled()) {
+        // Skip the eos "ready to read" notify once the query is being torn
+        // down (e.g. a sibling fragment delivered the result and the
+        // coordinator sent a [FINISHED] cancel): the downstream reader is
+        // itself being cancelled and is woken by the cancel machinery, not
+        // by this notify, and its shared-state source channel may already
+        // be gone (empty source_deps → the SIGSEGV @0x0 this guards).
         local_state._dependency->set_ready_to_read();
     }
     return Status::OK();
