@@ -17,6 +17,7 @@
 
 package org.apache.doris.service.arrowflight.sessions;
 
+import org.apache.doris.common.Config;
 import org.apache.doris.common.Status;
 import org.apache.doris.mysql.MysqlChannel;
 import org.apache.doris.qe.ConnectContext;
@@ -48,6 +49,20 @@ public class FlightSqlConnectContext extends ConnectContext {
     @Override
     public FlightSqlChannel getFlightSqlChannel() {
         return flightSqlChannel;
+    }
+
+    /**
+     * Flight sessions get their own idle bound (Config.arrow_flight_session_idle_timeout_second),
+     * tighter than the MySQL wait_timeout: an abandoned Flight session keeps its last query's
+     * coordinator — and that query's workload-group queue slot — alive until it is closed, so a
+     * client that opens a session per query and never closes it would otherwise pin a slot for
+     * the whole wait_timeout (8h by default). The bound only ever tightens wait_timeout; 0 disables it.
+     */
+    @Override
+    public long getIdleTimeoutS() {
+        long waitTimeoutS = super.getIdleTimeoutS();
+        int flightIdleS = Config.arrow_flight_session_idle_timeout_second;
+        return flightIdleS > 0 ? Math.min(waitTimeoutS, flightIdleS) : waitTimeoutS;
     }
 
     @Override

@@ -1250,8 +1250,8 @@ public class ConnectContext {
     private void killByTimeout(boolean killConnection) {
         if (killConnection) {
             LOG.warn("kill wait timeout connection, connection type: {}, connectionId: {}, remote: {}, "
-                            + "wait timeout: {}",
-                    getConnectType(), connectionId, getRemoteHostPortString(), sessionVariable.getWaitTimeoutS());
+                            + "idle timeout: {}",
+                    getConnectType(), connectionId, getRemoteHostPortString(), getIdleTimeoutS());
             killConnection();
         }
         // Now, cancel running query.
@@ -1274,6 +1274,15 @@ public class ConnectContext {
         }
     }
 
+    /**
+     * How long this connection may sleep (COM_SLEEP) before the timeout checker kills it.
+     * The MySQL protocol bound is the session's wait_timeout; protocol-specific contexts may
+     * tighten it (never widen it) — see FlightSqlConnectContext.
+     */
+    public long getIdleTimeoutS() {
+        return sessionVariable.getWaitTimeoutS();
+    }
+
     public void checkTimeout(long now) {
         if (startTime <= 0) {
             return;
@@ -1283,7 +1292,7 @@ public class ConnectContext {
         boolean killFlag = false;
         boolean killConnection = false;
         if (command == MysqlCommand.COM_SLEEP) {
-            if (delta > sessionVariable.getWaitTimeoutS() * 1000L) {
+            if (delta > getIdleTimeoutS() * 1000L) {
                 // Need kill this connection.
                 killFlag = true;
                 killConnection = true;
