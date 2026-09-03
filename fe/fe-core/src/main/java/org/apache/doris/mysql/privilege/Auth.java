@@ -287,14 +287,71 @@ public class Auth implements Writable {
         }
         ConnectContext ctx = ConnectContext.get();
         if (ctx != null && userIdentity.equals(ctx.getCurrentUserIdentity())) {
+            Set<String> sessionRoleOverride = ctx.getSessionRoleOverride();
+            if (sessionRoleOverride != null) {
+                // SU-narrowed session: the override REPLACES every role source (user grants, LDAP,
+                // authenticated roles). SuUserCommand enforced the ceiling at switch time.
+                Set<Role> narrowed = Sets.newHashSet();
+                for (String roleName : sessionRoleOverride) {
+                    Role role = roleManager.getRole(roleName);
+                    if (role != null) {
+                        narrowed.add(role);
+                    }
+                }
+                return narrowed;
+            }
             for (String roleName : ctx.getAuthenticatedRoles()) {
                 Role role = roleManager.getRole(roleName);
                 if (role != null) {
                     roles.add(role);
                 }
             }
+            // Dormant (SU-only) roles never activate in a normal session for the session's OWN
+            // identity: excluded here so grants AND row policies stay inert until an SU switch
+            // explicitly requests them. Introspection of OTHER identities is unaffected (guard above).
+            roles.removeIf(role -> isSuOnlyRole(role.getRoleName()));
         }
         return roles;
+    }
+
+    private static volatile String suOnlyPatternSource = null;
+    private static volatile java.util.regex.Pattern suOnlyPattern = null;
+
+    /** Whether a role is dormant outside SU sessions (Config.su_only_roles_pattern; invalid/empty = never). */
+    public static boolean isSuOnlyRole(String roleName) {
+        String src = Config.su_only_roles_pattern;
+        if (src == null || src.isEmpty()) {
+            return false;
+        }
+        java.util.regex.Pattern p = suOnlyPattern;
+        if (p == null || !src.equals(suOnlyPatternSource)) {
+            try {
+                p = java.util.regex.Pattern.compile(src);
+            } catch (Exception e) {
+                LOG.error("invalid su_only_roles_pattern '{}' — dormant-role gating DISABLED", src, e);
+                p = null;
+            }
+            suOnlyPattern = p;
+            suOnlyPatternSource = src;
+        }
+        return p != null && p.matcher(roleName).find();
+    }
+
+    /**
+     * RAW granted role names for an identity (user grants + LDAP), bypassing session shaping
+     * (SU override and dormant filtering). Used for the SU ceiling check and existence probing.
+     */
+    public Set<String> getGrantedRoleNamesRaw(UserIdentity userIdentity) {
+        Set<String> names = Sets.newHashSet(userRoleManager.getRolesByUser(userIdentity));
+        if (isLdapAuthEnabled()) {
+            Set<Role> ldapRoles = ldapManager.getUserRoles(userIdentity.getQualifiedUser());
+            if (!CollectionUtils.isEmpty(ldapRoles)) {
+                for (Role r : ldapRoles) {
+                    names.add(r.getRoleName());
+                }
+            }
+        }
+        return names;
     }
 
     public Set<String> getRoleNamesByUserWithLdap(UserIdentity user, boolean showUserDefaultRole) {
