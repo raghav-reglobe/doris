@@ -45,10 +45,20 @@ public class FlightSqlSessionIdleTimeoutTest {
             FlightSqlConnectContext ctx = new FlightSqlConnectContext("test-peer-identity");
             long waitTimeoutS = ctx.getSessionVariable().getWaitTimeoutS();
             Assert.assertTrue(waitTimeoutS > 0);
+            // the bound is floored at the query's exec timeout; pin it low so the bound is visible
+            ctx.getSessionVariable().setQueryTimeoutS(5);
 
-            // tighter than wait_timeout -> the Flight bound wins
+            // tighter than wait_timeout and above the exec timeout -> the Flight bound wins
             Config.arrow_flight_session_idle_timeout_second = 7;
             Assert.assertEquals(7L, ctx.getIdleTimeoutS());
+
+            // below the exec timeout -> the exec timeout floors it (a result drain is never
+            // killed before query_timeout would kill the query)
+            Config.arrow_flight_session_idle_timeout_second = 3;
+            Assert.assertEquals(5L, ctx.getIdleTimeoutS());
+            ctx.getSessionVariable().setQueryTimeoutS(20);
+            Assert.assertEquals(20L, ctx.getIdleTimeoutS());
+            ctx.getSessionVariable().setQueryTimeoutS(5);
 
             // looser than wait_timeout -> wait_timeout still applies (the bound never widens it)
             Config.arrow_flight_session_idle_timeout_second = (int) Math.min(Integer.MAX_VALUE, waitTimeoutS + 1000);

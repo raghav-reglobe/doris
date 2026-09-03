@@ -56,13 +56,21 @@ public class FlightSqlConnectContext extends ConnectContext {
      * tighter than the MySQL wait_timeout: an abandoned Flight session keeps its last query's
      * coordinator — and that query's workload-group queue slot — alive until it is closed, so a
      * client that opens a session per query and never closes it would otherwise pin a slot for
-     * the whole wait_timeout (8h by default). The bound only ever tightens wait_timeout; 0 disables it.
+     * the whole wait_timeout (8h by default).
+     *
+     * A Flight session is COM_SLEEP while the client drains the result from the BE (DoGet), and
+     * its idle clock runs from the query's START — so the bound is floored at the query's own
+     * execution timeout: a long result drain is never killed before query_timeout would kill the
+     * query itself. Effective bound = min(wait_timeout, max(config, exec timeout)); 0 disables it.
      */
     @Override
     public long getIdleTimeoutS() {
         long waitTimeoutS = super.getIdleTimeoutS();
         int flightIdleS = Config.arrow_flight_session_idle_timeout_second;
-        return flightIdleS > 0 ? Math.min(waitTimeoutS, flightIdleS) : waitTimeoutS;
+        if (flightIdleS <= 0) {
+            return waitTimeoutS;
+        }
+        return Math.min(waitTimeoutS, Math.max((long) flightIdleS, (long) getExecTimeoutS()));
     }
 
     @Override
