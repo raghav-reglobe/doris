@@ -23,10 +23,14 @@ import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.Config;
 import org.apache.doris.datasource.InternalCatalog;
 import org.apache.doris.nereids.parser.NereidsParser;
+import org.apache.doris.nereids.trees.plans.commands.CreateWorkloadGroupCommand;
+import org.apache.doris.nereids.trees.plans.commands.GrantResourcePrivilegeCommand;
 import org.apache.doris.nereids.trees.plans.commands.SuUserCommand;
+import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
 import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.utframe.TestWithFeService;
 
+import com.google.common.collect.Sets;
 import org.junit.Assert;
 import org.junit.jupiter.api.Test;
 
@@ -37,8 +41,10 @@ import java.util.Set;
  * SU (session-narrowed identity switch) acceptance tests:
  * (a) a narrowed session loses the target's personal grants (override REPLACES the role union);
  * (c) re-SU is refused; (d) a session that skips SU keeps only the switcher's own grants;
- * (f) narrowing never leaks into checks of OTHER identities; plus the dormant (SU-only) role
- * gating, both ceiling modes, the config gate, and the parser round trip.
+ * (f) narrowing never leaks into checks of OTHER identities; (g) the narrowed session keeps the
+ * person's own WORKLOAD GROUP usage (placement follows the person; never wider than her own
+ * session); plus the dormant (SU-only) role gating, both ceiling modes, the config gate, and
+ * the parser round trip.
  * End-to-end row-policy + audit coverage runs on the scratch rig (gate battery), not here.
  */
 public class SuUserNarrowingTest extends TestWithFeService {
@@ -59,6 +65,23 @@ public class SuUserNarrowingTest extends TestWithFeService {
 
     private boolean canSelectDb(UserIdentity user, String db) {
         return Env.getCurrentEnv().getAuth().checkDbPriv(user, CTL, db, PrivPredicate.SELECT);
+    }
+
+    private boolean canUseWorkloadGroup(UserIdentity user, String wg) {
+        return Env.getCurrentEnv().getAuth().checkWorkloadGroupPriv(user, wg, PrivPredicate.USAGE);
+    }
+
+    private void createWorkloadGroup(String name) throws Exception {
+        LogicalPlan plan = new NereidsParser().parseSingle("CREATE WORKLOAD GROUP IF NOT EXISTS " + name
+                + " PROPERTIES ('min_memory_percent'='10', 'max_memory_percent'='30%')");
+        Assert.assertTrue(plan instanceof CreateWorkloadGroupCommand);
+        ((CreateWorkloadGroupCommand) plan).run(connectContext, null);
+    }
+
+    private void grantWorkloadGroupUsage(String sql) throws Exception {
+        LogicalPlan plan = new NereidsParser().parseSingle(sql);
+        Assert.assertTrue(plan instanceof GrantResourcePrivilegeCommand);
+        ((GrantResourcePrivilegeCommand) plan).run(connectContext, null);
     }
 
     @Test
@@ -196,6 +219,61 @@ public class SuUserNarrowingTest extends TestWithFeService {
         } finally {
             Config.switch_user_users = savedUsers;
             Config.switch_user_role_ceiling = savedCeiling;
+            connectContext.setThreadLocalInfo();
+        }
+    }
+
+    @Test
+    public void testNarrowedSessionKeepsPersonsWorkloadGroupUsage() throws Exception {
+        addUser("wg_person", true);
+        createRole("space_wg");
+        createRole("space_wg_lane");
+        grantPriv("GRANT SELECT_PRIV ON internal.test.* TO ROLE 'space_wg';");
+        grantRole("GRANT 'space_wg','space_wg_lane' TO 'wg_person'@'%'");
+        grantPriv("GRANT SELECT_PRIV ON internal.perso.* TO 'wg_person'@'%';");
+        createWorkloadGroup("wg_person_lane");
+        createWorkloadGroup("wg_via_role");
+        createWorkloadGroup("wg_nobody");
+        // the login shape: USAGE granted DIRECTLY to the account (its default role), not via a role
+        grantWorkloadGroupUsage("GRANT USAGE_PRIV ON WORKLOAD GROUP 'wg_person_lane' TO 'wg_person'@'%';");
+        // a group reachable only through a role the person holds
+        grantWorkloadGroupUsage("GRANT USAGE_PRIV ON WORKLOAD GROUP 'wg_via_role' TO ROLE 'space_wg_lane';");
+
+        UserIdentity person = ident("wg_person");
+        ConnectContext ctx = new ConnectContext();
+        ctx.setCurrentUserIdentity(person);
+        ctx.setThreadLocalInfo();
+        String savedPattern = Config.su_only_roles_pattern;
+        try {
+            // the person's own session
+            Assert.assertTrue(canUseWorkloadGroup(person, "wg_person_lane"));
+            Assert.assertTrue(canUseWorkloadGroup(person, "wg_via_role"));
+            Assert.assertFalse(canUseWorkloadGroup(person, "wg_nobody"));
+
+            ctx.setSessionRoleOverride(Collections.singleton("space_wg"));
+            // data narrowing is intact: personal grant gone, requested role live
+            Assert.assertFalse(canSelectDb(person, "perso"));
+            Assert.assertTrue(canSelectDb(person, "test"));
+            // (g) the direct USAGE survives narrowing — the person's lane follows the person
+            Assert.assertTrue(canUseWorkloadGroup(person, "wg_person_lane"));
+            // ...and so does role-carried USAGE, even though that role was not requested
+            Assert.assertTrue(canUseWorkloadGroup(person, "wg_via_role"));
+            // never wider than the person's own session
+            Assert.assertFalse(canUseWorkloadGroup(person, "wg_nobody"));
+
+            // a DORMANT role's USAGE stays inert unless the switch requested it
+            Config.su_only_roles_pattern = "^space_wg_lane$";
+            Assert.assertFalse(canUseWorkloadGroup(person, "wg_via_role"));
+            Assert.assertTrue(canUseWorkloadGroup(person, "wg_person_lane"));
+            ctx.setSessionRoleOverride(Sets.newHashSet("space_wg", "space_wg_lane"));
+            Assert.assertTrue(canUseWorkloadGroup(person, "wg_via_role"));
+
+            // the widening is scoped to the session's OWN identity: another identity's check is untouched
+            ctx.setSessionRoleOverride(Collections.singleton("space_wg"));
+            Assert.assertFalse(canUseWorkloadGroup(ident("bystander_wg"), "wg_person_lane"));
+        } finally {
+            Config.su_only_roles_pattern = savedPattern;
+            ctx.setSessionRoleOverride(null);
             connectContext.setThreadLocalInfo();
         }
     }

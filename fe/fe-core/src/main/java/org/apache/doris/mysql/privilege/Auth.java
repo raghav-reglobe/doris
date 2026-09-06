@@ -354,6 +354,39 @@ public class Auth implements Writable {
         return names;
     }
 
+    /**
+     * The role set consulted for WORKLOAD GROUP privilege checks. Identical to
+     * {@link #getRolesByUserWithLdap} for a normal session. In an SU-narrowed session the
+     * narrowed set is widened with the effective identity's own granted roles (its default
+     * role (where direct grants live) plus explicit and LDAP roles; dormant roles stay
+     * excluded unless requested), so the narrowed session may use exactly the workload groups
+     * the person's own session could use. A workload group is placement, not data authority:
+     * the narrowed session runs in the target's default_workload_group (the same resolution as
+     * the person's own session), and the person's USAGE on it is typically a direct grant that
+     * narrowing would otherwise drop. Only the workload-group predicate reads this set;
+     * table, database, resource and cloud checks stay on the narrowed set, so data access
+     * cannot widen through it.
+     */
+    private Set<Role> getRolesForWorkloadGroupCheck(UserIdentity userIdentity) {
+        Set<Role> roles = getRolesByUserWithLdap(userIdentity);
+        ConnectContext ctx = ConnectContext.get();
+        if (ctx == null || ctx.getSessionRoleOverride() == null
+                || !userIdentity.equals(ctx.getCurrentUserIdentity())) {
+            return roles;
+        }
+        Set<Role> widened = Sets.newHashSet(roles);
+        for (String roleName : getGrantedRoleNamesRaw(userIdentity)) {
+            if (isSuOnlyRole(roleName)) {
+                continue;
+            }
+            Role role = roleManager.getRole(roleName);
+            if (role != null) {
+                widened.add(role);
+            }
+        }
+        return widened;
+    }
+
     public Set<String> getRoleNamesByUserWithLdap(UserIdentity user, boolean showUserDefaultRole) {
         Set<Role> rolesByUserWithLdap = getRolesByUserWithLdap(user);
         Set<String> res = Sets.newHashSetWithExpectedSize(rolesByUserWithLdap.size());
@@ -541,7 +574,7 @@ public class Auth implements Writable {
                 return true;
             }
 
-            Set<Role> roles = getRolesByUserWithLdap(currentUser);
+            Set<Role> roles = getRolesForWorkloadGroupCheck(currentUser);
             PrivBitSet savedPrivs = PrivBitSet.of();
             for (Role role : roles) {
                 if (role.checkWorkloadGroupPriv(workloadGroupName, wanted, savedPrivs)) {
