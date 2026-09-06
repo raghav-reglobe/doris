@@ -120,7 +120,10 @@ public class SuUserCommand extends Command implements NoForward {
         ctx.setCurrentUserIdentity(userIdentity);
         ctx.setSessionRoleOverride(ImmutableSet.copyOf(roles));
         if (!Strings.isNullOrEmpty(workloadGroup)) {
-            // USAGE on the workload group is checked per query against the NARROWED role set.
+            // Placement only. USAGE on the session's workload group (this clause, or the
+            // target's default_workload_group when omitted) is checked per query against the
+            // narrowed set widened with the target's own granted roles
+            // (Auth.getRolesForWorkloadGroupCheck): the person's lane follows the person.
             ctx.getSessionVariable().setWorkloadGroup(workloadGroup);
         }
         // The SU linkage event: authenticated + effective identity, roles, connection — the
