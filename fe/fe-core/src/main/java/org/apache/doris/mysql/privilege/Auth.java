@@ -27,6 +27,7 @@ import org.apache.doris.analysis.WorkloadGroupPattern;
 import org.apache.doris.catalog.DatabaseIf;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.InfoSchemaDb;
+import org.apache.doris.catalog.MysqlDb;
 import org.apache.doris.catalog.TableIf;
 import org.apache.doris.cloud.datasource.CloudInternalCatalog;
 import org.apache.doris.cloud.proto.Cloud;
@@ -298,6 +299,17 @@ public class Auth implements Writable {
                         narrowed.add(role);
                     }
                 }
+                // Preserve the implicit information_schema/mysql read access that every session's
+                // default role carries, so a narrowed session can still do basic metadata/client
+                // operations (BI drivers, SHOW, information_schema listings). These databases are
+                // self-filtered by the session's actual privileges — a narrowed session sees only
+                // rows for objects it can access — so keeping them widens NO data access while every
+                // privilege-bearing role (and the user's direct grants in the default role) stays
+                // dropped.
+                Role baseline = narrowingBaselineRole();
+                if (baseline != null) {
+                    narrowed.add(baseline);
+                }
                 return narrowed;
             }
             for (String roleName : ctx.getAuthenticatedRoles()) {
@@ -354,7 +366,40 @@ public class Auth implements Writable {
         return names;
     }
 
+    // The implicit information_schema/mysql read grants that RoleManager.createDefaultRole gives
+    // every user's default role, isolated into a synthetic role so an SU-narrowed session keeps
+    // them (self-filtered by the session's real privileges) without re-including the default role's
+    // privilege-bearing direct grants. Built once.
+    private static volatile Role narrowingBaselineRoleCache = null;
+
+    private static Role narrowingBaselineRole() {
+        Role cached = narrowingBaselineRoleCache;
+        if (cached != null) {
+            return cached;
+        }
+        try {
+            List<TablePattern> tablePatterns = Lists.newArrayList();
+            TablePattern info = new TablePattern(DEFAULT_CATALOG, InfoSchemaDb.DATABASE_NAME, "*");
+            info.analyze();
+            tablePatterns.add(info);
+            TablePattern mysql = new TablePattern(DEFAULT_CATALOG, MysqlDb.DATABASE_NAME, "*");
+            mysql.analyze();
+            tablePatterns.add(mysql);
+            WorkloadGroupPattern wg = new WorkloadGroupPattern(WorkloadGroupMgr.DEFAULT_GROUP_NAME);
+            wg.analyze();
+            Role role = new Role("su_narrowing_baseline", tablePatterns,
+                    PrivBitSet.of(Privilege.SELECT_PRIV), wg, PrivBitSet.of(Privilege.USAGE_PRIV));
+            narrowingBaselineRoleCache = role;
+            return role;
+        } catch (Exception e) {
+            LOG.warn("failed to build SU narrowing baseline role (information_schema/mysql reads "
+                    + "will not be preserved in narrowed sessions)", e);
+            return null;
+        }
+    }
+
     /**
+     * The role set consulted for WORKLOAD GROUP privilege checks.    /**
      * The role set consulted for WORKLOAD GROUP privilege checks. Identical to
      * {@link #getRolesByUserWithLdap} for a normal session. In an SU-narrowed session the
      * narrowed set is widened with the effective identity's own granted roles (its default
