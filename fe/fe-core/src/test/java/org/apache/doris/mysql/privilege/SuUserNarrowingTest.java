@@ -67,6 +67,11 @@ public class SuUserNarrowingTest extends TestWithFeService {
         return Env.getCurrentEnv().getAuth().checkDbPriv(user, CTL, db, PrivPredicate.SELECT);
     }
 
+    private boolean canSelectInfoSchema(UserIdentity user) {
+        return Env.getCurrentEnv().getAuth().checkDbPriv(user, CTL,
+                org.apache.doris.catalog.InfoSchemaDb.DATABASE_NAME, PrivPredicate.SELECT);
+    }
+
     private boolean canUseWorkloadGroup(UserIdentity user, String wg) {
         return Env.getCurrentEnv().getAuth().checkWorkloadGroupPriv(user, wg, PrivPredicate.USAGE);
     }
@@ -274,6 +279,39 @@ public class SuUserNarrowingTest extends TestWithFeService {
         } finally {
             Config.su_only_roles_pattern = savedPattern;
             ctx.setSessionRoleOverride(null);
+            connectContext.setThreadLocalInfo();
+        }
+    }
+
+    @Test
+    public void testNarrowedSessionPreservesInformationSchemaButDropsDirectGrants() throws Exception {
+        addUser("iuser", true);
+        createRole("ispace");
+        grantPriv("GRANT SELECT_PRIV ON internal.test.* TO ROLE 'ispace';");
+        grantRole("GRANT 'ispace' TO 'iuser'@'%'");
+        // a personal (default-role) grant on another db + the implicit information_schema read
+        grantPriv("GRANT SELECT_PRIV ON internal.perso.* TO 'iuser'@'%';");
+
+        UserIdentity iuser = ident("iuser");
+        ConnectContext ctx = new ConnectContext();
+        ctx.setCurrentUserIdentity(iuser);
+        ctx.setThreadLocalInfo();
+        try {
+            // un-narrowed: information_schema readable (default role), personal + role grants live
+            Assert.assertTrue(canSelectInfoSchema(iuser));
+            Assert.assertTrue(canSelectDb(iuser, "perso"));
+
+            ctx.setSessionRoleOverride(Collections.singleton("ispace"));
+            // narrowed: the requested role's grant stays, the DIRECT/default-role grant is dropped...
+            Assert.assertTrue(canSelectDb(iuser, "test"));
+            Assert.assertFalse(canSelectDb(iuser, "perso"));
+            // ...but the implicit information_schema read IS PRESERVED (the narrowing baseline role),
+            // so a narrowed session can still do metadata/client operations.
+            Assert.assertTrue(canSelectInfoSchema(iuser));
+
+            ctx.setSessionRoleOverride(null);
+            Assert.assertTrue(canSelectDb(iuser, "perso"));
+        } finally {
             connectContext.setThreadLocalInfo();
         }
     }
