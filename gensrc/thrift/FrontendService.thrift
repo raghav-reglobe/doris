@@ -71,6 +71,7 @@ struct TDescribeTablesParams {
   // Report COLUMN_KEY the way MySQL does. Forwarded from the schema scan node because
   // this request carries no session of its own.
   9: optional bool mysql_compatible_index_metadata = false
+  10: optional list<string> session_role_override // SU-narrowed session's active role subset (SU metadata narrowing)
 }
 
 // Results of a call to describeTable()
@@ -104,6 +105,7 @@ struct TGetDbsParams {
   // Reserved for downstream field `current_roles` to keep thrift field ids
   // wire-compatible across maintained branches. Do not reuse this id.
   7: optional set<string> reserved_field_7
+  8: optional list<string> session_role_override // SU-narrowed session's active role subset (SU metadata narrowing)
 }
 
 // getDbNames returns a list of database names , database ids and catalog names ,catalog ids
@@ -134,6 +136,7 @@ struct TGetTablesParams {
   // Columns needed by schema table callers. If unset, the callee returns the
   // full table status for backward compatibility.
   10: optional set<string> required_columns
+  11: optional list<string> session_role_override // SU-narrowed session's active role subset (SU metadata narrowing; getTableNames + listTableStatus)
 }
 
 struct TTableStatus {

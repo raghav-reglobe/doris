@@ -495,87 +495,106 @@ public class FrontendServiceImpl implements FrontendService.Iface {
 
     @Override
     public TGetDbsResult getDbNames(TGetDbsParams params) throws TException {
-        if (LOG.isDebugEnabled()) {
-            LOG.debug("get db request: {}", params);
+
+        boolean rpcNarrowed = false;
+        if (params.isSetSessionRoleOverride()) {
+            // SU narrowing: this metadata RPC carries the calling session's SU-narrowed role subset.
+            // Install it so the privilege filter below narrows name visibility to that set, then
+            // clear it in the finally (thrift handler threads are pooled).
+            UserIdentity suUser = params.isSetCurrentUserIdent()
+                    ? UserIdentity.fromThrift(params.current_user_ident)
+                    : UserIdentity.createAnalyzedUserIdentWithIp(params.user, params.user_ip);
+            Env.getCurrentEnv().getAuth().setRpcSessionNarrowing(suUser,
+                    Sets.newHashSet(params.getSessionRoleOverride()));
+            rpcNarrowed = true;
         }
-        TGetDbsResult result = new TGetDbsResult();
-
-        List<String> dbNames = Lists.newArrayList();
-        List<String> catalogNames = Lists.newArrayList();
-        List<Long> dbIds = Lists.newArrayList();
-        List<Long> catalogIds = Lists.newArrayList();
-
-        PatternMatcher matcher = null;
-        if (params.isSetPattern()) {
-            try {
-                matcher = PatternMatcher.createMysqlPattern(params.getPattern(),
-                        CaseSensibility.DATABASE.getCaseSensibility());
-            } catch (PatternMatcherException e) {
-                throw new TException("Pattern is in bad format: " + params.getPattern());
-            }
-        }
-
-        Env env = Env.getCurrentEnv();
-        List<CatalogIf> catalogIfs = Lists.newArrayList();
-        // list all catalogs or the specified catalog.
-        if (Strings.isNullOrEmpty(params.catalog)) {
-            catalogIfs = env.getCatalogMgr().listCatalogs();
-        } else {
-            catalogIfs.add(env.getCatalogMgr()
-                    .getCatalogOrException(params.catalog,
-                            catalog -> new TException("Unknown catalog " + catalog)));
-        }
-
-        for (CatalogIf catalog : catalogIfs) {
-            Collection<DatabaseIf> dbs = new HashSet<DatabaseIf>();
-            try {
-                dbs = catalog.getAllDbs();
-            } catch (Exception e) {
-                LOG.warn("failed to get database names for catalog {}", catalog.getName(), e);
-                // Some external catalog may fail to get databases due to wrong connection info.
-            }
+        try {
             if (LOG.isDebugEnabled()) {
-                LOG.debug("get db size: {}, in catalog: {}", dbs.size(), catalog.getName());
+                LOG.debug("get db request: {}", params);
             }
-            if (dbs.isEmpty() && params.isSetGetNullCatalog() && params.get_null_catalog) {
-                catalogNames.add(catalog.getName());
-                dbNames.add("NULL");
-                catalogIds.add(catalog.getId());
-                dbIds.add(-1L);
-                continue;
+            TGetDbsResult result = new TGetDbsResult();
+
+            List<String> dbNames = Lists.newArrayList();
+            List<String> catalogNames = Lists.newArrayList();
+            List<Long> dbIds = Lists.newArrayList();
+            List<Long> catalogIds = Lists.newArrayList();
+
+            PatternMatcher matcher = null;
+            if (params.isSetPattern()) {
+                try {
+                    matcher = PatternMatcher.createMysqlPattern(params.getPattern(),
+                            CaseSensibility.DATABASE.getCaseSensibility());
+                } catch (PatternMatcherException e) {
+                    throw new TException("Pattern is in bad format: " + params.getPattern());
+                }
             }
-            if (dbs.isEmpty()) {
-                continue;
-            }
-            UserIdentity currentUser = null;
-            if (params.isSetCurrentUserIdent()) {
-                currentUser = UserIdentity.fromThrift(params.current_user_ident);
+
+            Env env = Env.getCurrentEnv();
+            List<CatalogIf> catalogIfs = Lists.newArrayList();
+            // list all catalogs or the specified catalog.
+            if (Strings.isNullOrEmpty(params.catalog)) {
+                catalogIfs = env.getCatalogMgr().listCatalogs();
             } else {
-                currentUser = UserIdentity.createAnalyzedUserIdentWithIp(params.user, params.user_ip);
+                catalogIfs.add(env.getCatalogMgr()
+                        .getCatalogOrException(params.catalog,
+                                catalog -> new TException("Unknown catalog " + catalog)));
             }
-            for (DatabaseIf db : dbs) {
-                String dbName = db.getFullName();
-                if (!env.getAccessManager()
-                        .checkDbPriv(currentUser, catalog.getName(), dbName, PrivPredicate.SHOW)) {
+
+            for (CatalogIf catalog : catalogIfs) {
+                Collection<DatabaseIf> dbs = new HashSet<DatabaseIf>();
+                try {
+                    dbs = catalog.getAllDbs();
+                } catch (Exception e) {
+                    LOG.warn("failed to get database names for catalog {}", catalog.getName(), e);
+                    // Some external catalog may fail to get databases due to wrong connection info.
+                }
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("get db size: {}, in catalog: {}", dbs.size(), catalog.getName());
+                }
+                if (dbs.isEmpty() && params.isSetGetNullCatalog() && params.get_null_catalog) {
+                    catalogNames.add(catalog.getName());
+                    dbNames.add("NULL");
+                    catalogIds.add(catalog.getId());
+                    dbIds.add(-1L);
                     continue;
                 }
-
-                if (matcher != null && !matcher.match(getMysqlTableSchema(catalog.getName(), dbName))) {
+                if (dbs.isEmpty()) {
                     continue;
                 }
+                UserIdentity currentUser = null;
+                if (params.isSetCurrentUserIdent()) {
+                    currentUser = UserIdentity.fromThrift(params.current_user_ident);
+                } else {
+                    currentUser = UserIdentity.createAnalyzedUserIdentWithIp(params.user, params.user_ip);
+                }
+                for (DatabaseIf db : dbs) {
+                    String dbName = db.getFullName();
+                    if (!env.getAccessManager()
+                            .checkDbPriv(currentUser, catalog.getName(), dbName, PrivPredicate.SHOW)) {
+                        continue;
+                    }
 
-                catalogNames.add(catalog.getName());
-                dbNames.add(getMysqlTableSchema(catalog.getName(), dbName));
-                catalogIds.add(catalog.getId());
-                dbIds.add(db.getId());
+                    if (matcher != null && !matcher.match(getMysqlTableSchema(catalog.getName(), dbName))) {
+                        continue;
+                    }
+
+                    catalogNames.add(catalog.getName());
+                    dbNames.add(getMysqlTableSchema(catalog.getName(), dbName));
+                    catalogIds.add(catalog.getId());
+                    dbIds.add(db.getId());
+                }
+            }
+
+            result.setDbs(dbNames);
+            result.setCatalogs(catalogNames);
+            result.setCatalogIds(catalogIds);
+            result.setDbIds(dbIds);
+            return result;
+        } finally {
+            if (rpcNarrowed) {
+                Env.getCurrentEnv().getAuth().clearRpcSessionNarrowing();
             }
         }
-
-        result.setDbs(dbNames);
-        result.setCatalogs(catalogNames);
-        result.setCatalogIds(catalogIds);
-        result.setDbIds(dbIds);
-        return result;
     }
 
     private String getMysqlTableSchema(String ctl, String db) {
@@ -588,213 +607,251 @@ public class FrontendServiceImpl implements FrontendService.Iface {
 
     @Override
     public TGetTablesResult getTableNames(TGetTablesParams params) throws TException {
+
+        boolean rpcNarrowed = false;
+        if (params.isSetSessionRoleOverride()) {
+            // SU narrowing: this metadata RPC carries the calling session's SU-narrowed role subset.
+            // Install it so the privilege filter below narrows name visibility to that set, then
+            // clear it in the finally (thrift handler threads are pooled).
+            UserIdentity suUser = params.isSetCurrentUserIdent()
+                    ? UserIdentity.fromThrift(params.current_user_ident)
+                    : UserIdentity.createAnalyzedUserIdentWithIp(params.user, params.user_ip);
+            Env.getCurrentEnv().getAuth().setRpcSessionNarrowing(suUser,
+                    Sets.newHashSet(params.getSessionRoleOverride()));
+            rpcNarrowed = true;
+        }
+        try {
+            try {
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("get table name request: {}", params);
+                }
+                TGetTablesResult result = new TGetTablesResult();
+                List<String> tablesResult = Lists.newArrayList();
+                result.setTables(tablesResult);
+                PatternMatcher matcher = null;
+                if (params.isSetPattern()) {
+                    try {
+                        matcher = PatternMatcher.createMysqlPattern(params.getPattern(),
+                                CaseSensibility.TABLE.getCaseSensibility());
+                    } catch (PatternMatcherException e) {
+                        throw new TException("Pattern is in bad format: " + params.getPattern());
+                    }
+                }
+
+                // database privs should be checked in analysis phrase
+                UserIdentity currentUser;
+                if (params.isSetCurrentUserIdent()) {
+                    currentUser = UserIdentity.fromThrift(params.current_user_ident);
+                } else {
+                    currentUser = UserIdentity.createAnalyzedUserIdentWithIp(params.user, params.user_ip);
+                }
+                String catalogName = Strings.isNullOrEmpty(params.catalog) ? InternalCatalog.INTERNAL_CATALOG_NAME
+                        : params.catalog;
+                String dbName = getDbNameFromMysqlTableSchema(catalogName, params.db);
+                DatabaseIf<TableIf> db = Env.getCurrentEnv().getCatalogMgr()
+                        .getCatalogOrException(catalogName, catalog -> new TException("Unknown catalog: " + catalog))
+                        .getDbNullable(dbName);
+
+                if (db != null) {
+                    Set<String> tableNames;
+                    try {
+                        tableNames = db.getTableNamesOrEmptyWithLock();
+                        for (String tableName : tableNames) {
+                            if (LOG.isDebugEnabled()) {
+                                LOG.debug("get table: {}, wait to check", tableName);
+                            }
+                            if (!Env.getCurrentEnv().getAccessManager()
+                                    .checkTblPriv(currentUser, catalogName, dbName, tableName,
+                                            PrivPredicate.SHOW)) {
+                                continue;
+                            }
+                            if (matcher != null && !matcher.match(tableName)) {
+                                continue;
+                            }
+                            tablesResult.add(tableName);
+                        }
+                    } catch (Exception e) {
+                        LOG.warn("failed to get table names for db {} in catalog {}", params.db, catalogName, e);
+                    }
+                }
+                return result;
+            } catch (Throwable e) {
+                LOG.warn(e);
+                throw e;
+            }
+        } finally {
+            if (rpcNarrowed) {
+                Env.getCurrentEnv().getAuth().clearRpcSessionNarrowing();
+            }
+        }
+    }
+
+    @Override
+    public TListTableStatusResult listTableStatus(TGetTablesParams params) throws TException {
+
+        boolean rpcNarrowed = false;
+        if (params.isSetSessionRoleOverride()) {
+            // SU narrowing: this metadata RPC carries the calling session's SU-narrowed role subset.
+            // Install it so the privilege filter below narrows name visibility to that set, then
+            // clear it in the finally (thrift handler threads are pooled).
+            UserIdentity suUser = params.isSetCurrentUserIdent()
+                    ? UserIdentity.fromThrift(params.current_user_ident)
+                    : UserIdentity.createAnalyzedUserIdentWithIp(params.user, params.user_ip);
+            Env.getCurrentEnv().getAuth().setRpcSessionNarrowing(suUser,
+                    Sets.newHashSet(params.getSessionRoleOverride()));
+            rpcNarrowed = true;
+        }
         try {
             if (LOG.isDebugEnabled()) {
-                LOG.debug("get table name request: {}", params);
+                LOG.debug("get list table request: {}", params);
             }
-            TGetTablesResult result = new TGetTablesResult();
-            List<String> tablesResult = Lists.newArrayList();
+            TListTableStatusResult result = new TListTableStatusResult();
+            List<TTableStatus> tablesResult = Lists.newArrayList();
             result.setTables(tablesResult);
+            Set<String> requiredColumns = params.isSetRequiredColumns()
+                    ? params.getRequiredColumns().stream()
+                            .map(column -> column.toUpperCase(Locale.ROOT))
+                            .collect(Collectors.toSet())
+                    : null;
             PatternMatcher matcher = null;
+            String specifiedTable = null;
             if (params.isSetPattern()) {
                 try {
                     matcher = PatternMatcher.createMysqlPattern(params.getPattern(),
                             CaseSensibility.TABLE.getCaseSensibility());
                 } catch (PatternMatcherException e) {
-                    throw new TException("Pattern is in bad format: " + params.getPattern());
+                    throw new TException("Pattern is in bad format " + params.getPattern());
                 }
             }
-
+            if (params.isSetTable()) {
+                specifiedTable = params.getTable();
+            }
             // database privs should be checked in analysis phrase
+
             UserIdentity currentUser;
             if (params.isSetCurrentUserIdent()) {
                 currentUser = UserIdentity.fromThrift(params.current_user_ident);
             } else {
                 currentUser = UserIdentity.createAnalyzedUserIdentWithIp(params.user, params.user_ip);
             }
-            String catalogName = Strings.isNullOrEmpty(params.catalog) ? InternalCatalog.INTERNAL_CATALOG_NAME
-                    : params.catalog;
-            String dbName = getDbNameFromMysqlTableSchema(catalogName, params.db);
-            DatabaseIf<TableIf> db = Env.getCurrentEnv().getCatalogMgr()
-                    .getCatalogOrException(catalogName, catalog -> new TException("Unknown catalog: " + catalog))
-                    .getDbNullable(dbName);
 
-            if (db != null) {
-                Set<String> tableNames;
-                try {
-                    tableNames = db.getTableNamesOrEmptyWithLock();
-                    for (String tableName : tableNames) {
-                        if (LOG.isDebugEnabled()) {
-                            LOG.debug("get table: {}, wait to check", tableName);
+            String catalogName = InternalCatalog.INTERNAL_CATALOG_NAME;
+            if (params.isSetCatalog()) {
+                catalogName = params.catalog;
+            }
+            String dbName = getDbNameFromMysqlTableSchema(catalogName, params.db);
+            CatalogIf catalog = Env.getCurrentEnv().getCatalogMgr().getCatalog(catalogName);
+            if (catalog != null) {
+                DatabaseIf db = catalog.getDbNullable(dbName);
+                if (db != null) {
+                    try {
+                        List<TableIf> tables;
+                        if (!params.isSetType() || params.getType() == null || params.getType().isEmpty()) {
+                            tables = db.getTablesIgnoreException();
+                        } else {
+                            switch (params.getType()) {
+                                case "VIEW":
+                                    tables = db.getViewsOrEmpty();
+                                    break;
+                                default:
+                                    tables = db.getTablesIgnoreException();
+                            }
                         }
-                        if (!Env.getCurrentEnv().getAccessManager()
-                                .checkTblPriv(currentUser, catalogName, dbName, tableName,
-                                        PrivPredicate.SHOW)) {
-                            continue;
+                        for (TableIf table : tables) {
+                            if (table.isTemporary()) {
+                                continue;
+                            }
+                            if (!Env.getCurrentEnv().getAccessManager()
+                                    .checkTblPriv(currentUser, catalogName, dbName,
+                                            table.getName(), PrivPredicate.SHOW)) {
+                                continue;
+                            }
+                            if (matcher != null && !matcher.match(table.getName())) {
+                                continue;
+                            }
+                            if (specifiedTable != null && !specifiedTable.equals(table.getName())) {
+                                continue;
+                            }
+                            // For the follower node in cloud mode,
+                            // when querying the information_schema table,
+                            // the version needs to be updated.
+                            // Otherwise, the version will always be the old value
+                            // unless there is a query for the table in the follower node.
+                            if (!Env.getCurrentEnv().isMaster() && Config.isCloudMode()
+                                    && table instanceof OlapTable) {
+                                OlapTable olapTable = (OlapTable) table;
+                                List<CloudPartition> partitions = olapTable.getAllPartitions().stream()
+                                        .filter(p -> p instanceof CloudPartition)
+                                        .map(cloudPartition -> (CloudPartition) cloudPartition)
+                                        .collect(Collectors.toList());
+                                CloudPartition.getSnapshotVisibleVersion(partitions);
+                            }
+                            table.readLock();
+                            try {
+                                long lastCheckTime = table.getLastCheckTime() <= 0 ? 0 : table.getLastCheckTime();
+                                TTableStatus status = new TTableStatus();
+                                status.setName(table.getName());
+                                status.setType(table.getMysqlType());
+                                // TABLE_COMMENT is a required Thrift field, so it must always be
+                                // set — but for some external tables (e.g. Iceberg since #64263)
+                                // getComment() loads the full table metadata from the remote
+                                // catalog. Only pay that lookup when the scan actually projects
+                                // TABLE_COMMENT, same as the other pruned status columns.
+                                status.setComment(needTableStatusColumn(requiredColumns, "TABLE_COMMENT")
+                                        ? table.getComment()
+                                        : "");
+                                if (needTableStatusColumn(requiredColumns, "ENGINE")) {
+                                    status.setEngine(table.getEngine());
+                                }
+                                if (needTableStatusColumn(requiredColumns, "CREATE_TIME")) {
+                                    status.setCreateTime(table.getCreateTime());
+                                }
+                                if (needTableStatusColumn(requiredColumns, "LAST_CHECK_TIME")
+                                        || needTableStatusColumn(requiredColumns, "CHECK_TIME")) {
+                                    status.setLastCheckTime(lastCheckTime / 1000);
+                                }
+                                if (needTableStatusColumn(requiredColumns, "UPDATE_TIME")) {
+                                    status.setUpdateTime(table.getUpdateTime() / 1000);
+                                }
+                                if (needTableStatusColumn(requiredColumns, "CHECK_TIME")) {
+                                    status.setCheckTime(lastCheckTime / 1000);
+                                }
+                                if (needTableStatusColumn(requiredColumns, "TABLE_COLLATION")) {
+                                    status.setCollation("utf-8");
+                                }
+                                TableIf.TableStatusStats tableStatusStats =
+                                        needTableStatusStats(requiredColumns) ? table.getTableStatusStats() : null;
+                                if (needTableStatusColumn(requiredColumns, "TABLE_ROWS")) {
+                                    status.setRows(tableStatusStats.getRows());
+                                }
+                                if (needTableStatusColumn(requiredColumns, "DATA_LENGTH")) {
+                                    status.setDataLength(tableStatusStats.getDataLength());
+                                }
+                                if (needTableStatusColumn(requiredColumns, "AVG_ROW_LENGTH")) {
+                                    status.setAvgRowLength(tableStatusStats.getAvgRowLength());
+                                }
+                                if (needTableStatusColumn(requiredColumns, "INDEX_LENGTH")) {
+                                    status.setIndexLength(tableStatusStats.getIndexLength());
+                                }
+                                if (table instanceof View) {
+                                    status.setDdlSql(((View) table).getInlineViewDef());
+                                }
+                                tablesResult.add(status);
+                            } finally {
+                                table.readUnlock();
+                            }
                         }
-                        if (matcher != null && !matcher.match(tableName)) {
-                            continue;
-                        }
-                        tablesResult.add(tableName);
+                    } catch (Exception e) {
+                        LOG.warn("failed to get tables for db {} in catalog {}", db.getFullName(), catalogName, e);
                     }
-                } catch (Exception e) {
-                    LOG.warn("failed to get table names for db {} in catalog {}", params.db, catalogName, e);
                 }
             }
             return result;
-        } catch (Throwable e) {
-            LOG.warn(e);
-            throw e;
-        }
-    }
-
-    @Override
-    public TListTableStatusResult listTableStatus(TGetTablesParams params) throws TException {
-        if (LOG.isDebugEnabled()) {
-            LOG.debug("get list table request: {}", params);
-        }
-        TListTableStatusResult result = new TListTableStatusResult();
-        List<TTableStatus> tablesResult = Lists.newArrayList();
-        result.setTables(tablesResult);
-        Set<String> requiredColumns = params.isSetRequiredColumns()
-                ? params.getRequiredColumns().stream()
-                        .map(column -> column.toUpperCase(Locale.ROOT))
-                        .collect(Collectors.toSet())
-                : null;
-        PatternMatcher matcher = null;
-        String specifiedTable = null;
-        if (params.isSetPattern()) {
-            try {
-                matcher = PatternMatcher.createMysqlPattern(params.getPattern(),
-                        CaseSensibility.TABLE.getCaseSensibility());
-            } catch (PatternMatcherException e) {
-                throw new TException("Pattern is in bad format " + params.getPattern());
+        } finally {
+            if (rpcNarrowed) {
+                Env.getCurrentEnv().getAuth().clearRpcSessionNarrowing();
             }
         }
-        if (params.isSetTable()) {
-            specifiedTable = params.getTable();
-        }
-        // database privs should be checked in analysis phrase
-
-        UserIdentity currentUser;
-        if (params.isSetCurrentUserIdent()) {
-            currentUser = UserIdentity.fromThrift(params.current_user_ident);
-        } else {
-            currentUser = UserIdentity.createAnalyzedUserIdentWithIp(params.user, params.user_ip);
-        }
-
-        String catalogName = InternalCatalog.INTERNAL_CATALOG_NAME;
-        if (params.isSetCatalog()) {
-            catalogName = params.catalog;
-        }
-        String dbName = getDbNameFromMysqlTableSchema(catalogName, params.db);
-        CatalogIf catalog = Env.getCurrentEnv().getCatalogMgr().getCatalog(catalogName);
-        if (catalog != null) {
-            DatabaseIf db = catalog.getDbNullable(dbName);
-            if (db != null) {
-                try {
-                    List<TableIf> tables;
-                    if (!params.isSetType() || params.getType() == null || params.getType().isEmpty()) {
-                        tables = db.getTablesIgnoreException();
-                    } else {
-                        switch (params.getType()) {
-                            case "VIEW":
-                                tables = db.getViewsOrEmpty();
-                                break;
-                            default:
-                                tables = db.getTablesIgnoreException();
-                        }
-                    }
-                    for (TableIf table : tables) {
-                        if (table.isTemporary()) {
-                            continue;
-                        }
-                        if (!Env.getCurrentEnv().getAccessManager()
-                                .checkTblPriv(currentUser, catalogName, dbName,
-                                        table.getName(), PrivPredicate.SHOW)) {
-                            continue;
-                        }
-                        if (matcher != null && !matcher.match(table.getName())) {
-                            continue;
-                        }
-                        if (specifiedTable != null && !specifiedTable.equals(table.getName())) {
-                            continue;
-                        }
-                        // For the follower node in cloud mode,
-                        // when querying the information_schema table,
-                        // the version needs to be updated.
-                        // Otherwise, the version will always be the old value
-                        // unless there is a query for the table in the follower node.
-                        if (!Env.getCurrentEnv().isMaster() && Config.isCloudMode()
-                                && table instanceof OlapTable) {
-                            OlapTable olapTable = (OlapTable) table;
-                            List<CloudPartition> partitions = olapTable.getAllPartitions().stream()
-                                    .filter(p -> p instanceof CloudPartition)
-                                    .map(cloudPartition -> (CloudPartition) cloudPartition)
-                                    .collect(Collectors.toList());
-                            CloudPartition.getSnapshotVisibleVersion(partitions);
-                        }
-                        table.readLock();
-                        try {
-                            long lastCheckTime = table.getLastCheckTime() <= 0 ? 0 : table.getLastCheckTime();
-                            TTableStatus status = new TTableStatus();
-                            status.setName(table.getName());
-                            status.setType(table.getMysqlType());
-                            // TABLE_COMMENT is a required Thrift field, so it must always be
-                            // set — but for some external tables (e.g. Iceberg since #64263)
-                            // getComment() loads the full table metadata from the remote
-                            // catalog. Only pay that lookup when the scan actually projects
-                            // TABLE_COMMENT, same as the other pruned status columns.
-                            status.setComment(needTableStatusColumn(requiredColumns, "TABLE_COMMENT")
-                                    ? table.getComment()
-                                    : "");
-                            if (needTableStatusColumn(requiredColumns, "ENGINE")) {
-                                status.setEngine(table.getEngine());
-                            }
-                            if (needTableStatusColumn(requiredColumns, "CREATE_TIME")) {
-                                status.setCreateTime(table.getCreateTime());
-                            }
-                            if (needTableStatusColumn(requiredColumns, "LAST_CHECK_TIME")
-                                    || needTableStatusColumn(requiredColumns, "CHECK_TIME")) {
-                                status.setLastCheckTime(lastCheckTime / 1000);
-                            }
-                            if (needTableStatusColumn(requiredColumns, "UPDATE_TIME")) {
-                                status.setUpdateTime(table.getUpdateTime() / 1000);
-                            }
-                            if (needTableStatusColumn(requiredColumns, "CHECK_TIME")) {
-                                status.setCheckTime(lastCheckTime / 1000);
-                            }
-                            if (needTableStatusColumn(requiredColumns, "TABLE_COLLATION")) {
-                                status.setCollation("utf-8");
-                            }
-                            TableIf.TableStatusStats tableStatusStats =
-                                    needTableStatusStats(requiredColumns) ? table.getTableStatusStats() : null;
-                            if (needTableStatusColumn(requiredColumns, "TABLE_ROWS")) {
-                                status.setRows(tableStatusStats.getRows());
-                            }
-                            if (needTableStatusColumn(requiredColumns, "DATA_LENGTH")) {
-                                status.setDataLength(tableStatusStats.getDataLength());
-                            }
-                            if (needTableStatusColumn(requiredColumns, "AVG_ROW_LENGTH")) {
-                                status.setAvgRowLength(tableStatusStats.getAvgRowLength());
-                            }
-                            if (needTableStatusColumn(requiredColumns, "INDEX_LENGTH")) {
-                                status.setIndexLength(tableStatusStats.getIndexLength());
-                            }
-                            if (table instanceof View) {
-                                status.setDdlSql(((View) table).getInlineViewDef());
-                            }
-                            tablesResult.add(status);
-                        } finally {
-                            table.readUnlock();
-                        }
-                    }
-                } catch (Exception e) {
-                    LOG.warn("failed to get tables for db {} in catalog {}", db.getFullName(), catalogName, e);
-                }
-            }
-        }
-        return result;
     }
 
     private static boolean needTableStatusColumn(Set<String> requiredColumns, String columnName) {
@@ -949,85 +1006,104 @@ public class FrontendServiceImpl implements FrontendService.Iface {
 
     @Override
     public TDescribeTablesResult describeTables(TDescribeTablesParams params) throws TException {
-        if (LOG.isDebugEnabled()) {
-            LOG.debug("get desc tables request: {}", params);
-        }
-        TDescribeTablesResult result = new TDescribeTablesResult();
-        List<TColumnDef> columns = Lists.newArrayList();
-        List<Integer> tablesOffset = Lists.newArrayList();
-        List<String> tables = params.getTablesName();
-        result.setColumns(columns);
-        result.setTablesOffset(tablesOffset);
 
-        // database privs should be checked in analysis phrase
-        UserIdentity currentUser = null;
-        if (params.isSetCurrentUserIdent()) {
-            currentUser = UserIdentity.fromThrift(params.current_user_ident);
-        } else {
-            currentUser = UserIdentity.createAnalyzedUserIdentWithIp(params.user, params.user_ip);
+        boolean rpcNarrowed = false;
+        if (params.isSetSessionRoleOverride()) {
+            // SU narrowing: this metadata RPC carries the calling session's SU-narrowed role subset.
+            // Install it so the privilege filter below narrows name visibility to that set, then
+            // clear it in the finally (thrift handler threads are pooled).
+            UserIdentity suUser = params.isSetCurrentUserIdent()
+                    ? UserIdentity.fromThrift(params.current_user_ident)
+                    : UserIdentity.createAnalyzedUserIdentWithIp(params.user, params.user_ip);
+            Env.getCurrentEnv().getAuth().setRpcSessionNarrowing(suUser,
+                    Sets.newHashSet(params.getSessionRoleOverride()));
+            rpcNarrowed = true;
         }
-        String dbName = getDbNameFromMysqlTableSchema(params.catalog, params.db);
-        for (String tableName : tables) {
-            if (!Env.getCurrentEnv().getAccessManager()
-                    .checkTblPriv(currentUser, params.catalog, dbName, tableName, PrivPredicate.SHOW)) {
-                return result;
+        try {
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("get desc tables request: {}", params);
             }
-        }
+            TDescribeTablesResult result = new TDescribeTablesResult();
+            List<TColumnDef> columns = Lists.newArrayList();
+            List<Integer> tablesOffset = Lists.newArrayList();
+            List<String> tables = params.getTablesName();
+            result.setColumns(columns);
+            result.setTablesOffset(tablesOffset);
 
-        String catalogName = Strings.isNullOrEmpty(params.catalog) ? InternalCatalog.INTERNAL_CATALOG_NAME
-                : params.catalog;
-        DatabaseIf<TableIf> db = Env.getCurrentEnv().getCatalogMgr()
-                .getCatalogOrException(catalogName, catalog -> new TException("Unknown catalog " + catalog))
-                .getDbNullable(dbName);
-        if (db != null) {
-            String skipTable = DebugPointUtil.getDebugParamOrDefault(
-                    "FE.describeTables.skipTable", "value", "");
+            // database privs should be checked in analysis phrase
+            UserIdentity currentUser = null;
+            if (params.isSetCurrentUserIdent()) {
+                currentUser = UserIdentity.fromThrift(params.current_user_ident);
+            } else {
+                currentUser = UserIdentity.createAnalyzedUserIdentWithIp(params.user, params.user_ip);
+            }
+            String dbName = getDbNameFromMysqlTableSchema(params.catalog, params.db);
             for (String tableName : tables) {
-                TableIf table = db.getTableNullableIfException(tableName);
-                if (!skipTable.isEmpty() && tableName.equals(skipTable)) {
-                    table = null;
+                if (!Env.getCurrentEnv().getAccessManager()
+                        .checkTblPriv(currentUser, params.catalog, dbName, tableName, PrivPredicate.SHOW)) {
+                    return result;
                 }
-                if (table != null && !table.isTemporary()) {
-                    table.readLock();
-                    try {
-                        // MySQL marks a column PRI, UNI or MUL depending on the kind of index it
-                        // leads. Doris used to report its table model here instead, which meant
-                        // values such as AGG and DUP that no MySQL client knows what to do with.
-                        Map<String, String> columnKeys = params.isMysqlCompatibleIndexMetadata()
-                                ? TableKeyMeta.buildColumnKeys(table) : Collections.emptyMap();
-                        List<Column> baseSchema = table.getBaseSchemaOrEmpty();
-                        for (Column column : baseSchema) {
-                            final TColumnDesc desc = getColumnDesc(column);
-                            final TColumnDef colDef = new TColumnDef(desc);
-                            final String comment = column.getComment();
-                            if (comment != null) {
-                                if (Config.column_comment_length_limit > 0
-                                        && comment.length() > Config.column_comment_length_limit) {
-                                    colDef.setComment(comment.substring(0, Config.column_comment_length_limit));
-                                } else {
-                                    colDef.setComment(comment);
-                                }
-                            }
-                            if (params.isMysqlCompatibleIndexMetadata()) {
-                                String columnKey = columnKeys.get(column.getName());
-                                if (columnKey != null) {
-                                    desc.setColumnKey(columnKey);
-                                }
-                            } else if (column.isKey() && table instanceof OlapTable) {
-                                desc.setColumnKey(((OlapTable) table).getKeysType().toMetadata());
-                            }
-                            columns.add(colDef);
-                        }
-                    } finally {
-                        table.readUnlock();
+            }
+
+            String catalogName = Strings.isNullOrEmpty(params.catalog) ? InternalCatalog.INTERNAL_CATALOG_NAME
+                    : params.catalog;
+            DatabaseIf<TableIf> db = Env.getCurrentEnv().getCatalogMgr()
+                    .getCatalogOrException(catalogName, catalog -> new TException("Unknown catalog " + catalog))
+                    .getDbNullable(dbName);
+            if (db != null) {
+                String skipTable = DebugPointUtil.getDebugParamOrDefault(
+                        "FE.describeTables.skipTable", "value", "");
+                for (String tableName : tables) {
+                    TableIf table = db.getTableNullableIfException(tableName);
+                    if (!skipTable.isEmpty() && tableName.equals(skipTable)) {
+                        table = null;
                     }
+                    if (table != null && !table.isTemporary()) {
+                        table.readLock();
+                        try {
+                            // MySQL marks a column PRI, UNI or MUL depending on the kind of index it
+                            // leads. Doris used to report its table model here instead, which meant
+                            // values such as AGG and DUP that no MySQL client knows what to do with.
+                            Map<String, String> columnKeys = params.isMysqlCompatibleIndexMetadata()
+                                    ? TableKeyMeta.buildColumnKeys(table) : Collections.emptyMap();
+                            List<Column> baseSchema = table.getBaseSchemaOrEmpty();
+                            for (Column column : baseSchema) {
+                                final TColumnDesc desc = getColumnDesc(column);
+                                final TColumnDef colDef = new TColumnDef(desc);
+                                final String comment = column.getComment();
+                                if (comment != null) {
+                                    if (Config.column_comment_length_limit > 0
+                                            && comment.length() > Config.column_comment_length_limit) {
+                                        colDef.setComment(comment.substring(0, Config.column_comment_length_limit));
+                                    } else {
+                                        colDef.setComment(comment);
+                                    }
+                                }
+                                if (params.isMysqlCompatibleIndexMetadata()) {
+                                    String columnKey = columnKeys.get(column.getName());
+                                    if (columnKey != null) {
+                                        desc.setColumnKey(columnKey);
+                                    }
+                                } else if (column.isKey() && table instanceof OlapTable) {
+                                    desc.setColumnKey(((OlapTable) table).getKeysType().toMetadata());
+                                }
+                                columns.add(colDef);
+                            }
+                        } finally {
+                            table.readUnlock();
+                        }
+                    }
+                    // every requested table should have an offset, even if the table is missing,
+                    // otherwise the BE can not map columns to the correct table name.
+                    tablesOffset.add(columns.size());
                 }
-                // every requested table should have an offset, even if the table is missing,
-                // otherwise the BE can not map columns to the correct table name.
-                tablesOffset.add(columns.size());
+            }
+            return result;
+        } finally {
+            if (rpcNarrowed) {
+                Env.getCurrentEnv().getAuth().clearRpcSessionNarrowing();
             }
         }
-        return result;
     }
 
     private TColumnDesc getColumnDesc(Column column) {

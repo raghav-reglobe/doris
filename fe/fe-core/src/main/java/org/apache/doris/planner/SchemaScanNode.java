@@ -162,6 +162,13 @@ public class SchemaScanNode extends ScanNode {
 
         TUserIdentity tCurrentUser = ConnectContext.get().getCurrentUserIdentity().toThrift();
         msg.schema_scan_node.setCurrentUserIdent(tCurrentUser);
+        // SU narrowing: carry the SU-narrowed role subset in the plan so the BE->FE metadata
+        // RPCs (getDbNames/getTableNames/listTableStatus/describeTables) narrow name
+        // visibility to the same set the session sees; null = normal session (no narrowing).
+        java.util.Set<String> sessionRoleOverride = ConnectContext.get().getSessionRoleOverride();
+        if (sessionRoleOverride != null) {
+            msg.schema_scan_node.setSessionRoleOverride(new ArrayList<>(sessionRoleOverride));
+        }
         msg.schema_scan_node.setFrontendConjuncts(GsonUtils.GSON.toJson(frontendConjuncts));
         setFeAddrList(msg);
     }

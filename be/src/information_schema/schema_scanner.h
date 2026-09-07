@@ -73,6 +73,9 @@ struct SchemaScannerCommonParam {
     const std::string* catalog = nullptr;
     std::set<TNetworkAddress> fe_addr_list;
     std::set<std::string> required_columns;
+    // SU narrowing: SU-narrowed session's active role subset, carried from the FE plan
+    // (TSchemaScanNode) so the BE->FE metadata RPCs can narrow name visibility. Empty = none.
+    std::vector<std::string> session_role_override;
 };
 
 // scanner parameter from frontend
