@@ -21,6 +21,7 @@ import org.apache.doris.analysis.Expr;
 import org.apache.doris.analysis.SlotRef;
 import org.apache.doris.analysis.StmtType;
 import org.apache.doris.analysis.UserIdentity;
+import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.TableIf;
 import org.apache.doris.catalog.info.TableNameInfo;
@@ -45,6 +46,7 @@ import org.apache.doris.qe.StmtExecutor;
 
 import org.apache.commons.lang3.StringUtils;
 
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
@@ -155,7 +157,7 @@ public class CreatePolicyCommand extends Command implements ForwardWithSync {
                 wherePredicate.get().foreach(expr -> {
                     if (expr instanceof UnboundSlot) {
                         UnboundSlot slot = (UnboundSlot) expr;
-                        if (tableIf.getColumn(slot.getName()) == null) {
+                        if (!columnExistsInSchema(tableIf, slot.getName())) {
                             throw new org.apache.doris.nereids.exceptions.AnalysisException(
                                     "column not exist: " + slot.getName());
                         }
@@ -163,6 +165,27 @@ public class CreatePolicyCommand extends Command implements ForwardWithSync {
                 });
 
         }
+    }
+
+    /**
+     * Whether {@code columnName} exists on the target table/view, resolved against the SCHEMA
+     * LIST (getFullSchema) rather than getColumn(). getColumn() reads the nameToColumn map, which
+     * Table's constructor keys by {@link Column#getDefineName()}; after FE metadata replay a VIEW
+     * whose body reads an EXTERNAL catalog can carry columns whose defineName diverges from their
+     * name, so getColumn(name) misses a column that DESCRIBE, query planning, and the row-policy
+     * runtime (LogicalCheckPolicy binds the predicate against the plan output) all resolve. The
+     * schema list is the source those working paths use, so this agrees with them and never
+     * rejects a column getColumn would have accepted (getFullSchema is a superset of the map).
+     */
+    // package-private for CreatePolicyColumnResolutionTest
+    static boolean columnExistsInSchema(TableIf tableIf, String columnName) {
+        String target = columnName.toLowerCase(Locale.ROOT);
+        for (Column column : tableIf.getFullSchema()) {
+            if (column.getName().toLowerCase(Locale.ROOT).equals(target)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private Policy createPolicy(ConnectContext ctx, StmtExecutor executor) throws AnalysisException {
