@@ -65,13 +65,13 @@ struct TDescribeTablesParams {
   5: optional Types.TUserIdentity current_user_ident // to replace the user and user ip
   6: optional bool show_hidden_columns = false
   7: optional string catalog
-  // Reserved for downstream field `current_roles` to keep thrift field ids
-  // wire-compatible across maintained branches. Do not reuse this id.
-  8: optional set<string> reserved_field_8
+  // Session-narrowed (SU) session: the active role subset the calling session runs under, so
+  // the handler narrows name visibility to that set. Unset = not narrowed. This id was
+  // reserved for exactly this field.
+  8: optional set<string> current_roles
   // Report COLUMN_KEY the way MySQL does. Forwarded from the schema scan node because
   // this request carries no session of its own.
   9: optional bool mysql_compatible_index_metadata = false
-  10: optional list<string> session_role_override // SU-narrowed session's active role subset (SU metadata narrowing)
 }
 
 // Results of a call to describeTable()
@@ -102,10 +102,10 @@ struct TGetDbsParams {
   4: optional Types.TUserIdentity current_user_ident // to replace the user and user ip
   5: optional string catalog
   6: optional bool get_null_catalog  //if catalog is empty , get dbName ="NULL" and dbId = -1.
-  // Reserved for downstream field `current_roles` to keep thrift field ids
-  // wire-compatible across maintained branches. Do not reuse this id.
-  7: optional set<string> reserved_field_7
-  8: optional list<string> session_role_override // SU-narrowed session's active role subset (SU metadata narrowing)
+  // Session-narrowed (SU) session: the active role subset the calling session runs under, so
+  // the handler narrows name visibility to that set. Unset = not narrowed. This id was
+  // reserved for exactly this field.
+  7: optional set<string> current_roles
 }
 
 // getDbNames returns a list of database names , database ids and catalog names ,catalog ids
@@ -130,13 +130,13 @@ struct TGetTablesParams {
   6: optional string type
   7: optional string catalog
   8: optional string table
-  // Reserved for downstream field `current_roles` to keep thrift field ids
-  // wire-compatible across maintained branches. Do not reuse this id.
-  9: optional set<string> reserved_field_9
+  // Session-narrowed (SU) session: the active role subset the calling session runs under, so
+  // the handler narrows name visibility to that set. Unset = not narrowed. This id was
+  // reserved for exactly this field.
+  9: optional set<string> current_roles
   // Columns needed by schema table callers. If unset, the callee returns the
   // full table status for backward compatibility.
   10: optional set<string> required_columns
-  11: optional list<string> session_role_override // SU-narrowed session's active role subset (SU metadata narrowing; getTableNames + listTableStatus)
 }
 
 struct TTableStatus {
