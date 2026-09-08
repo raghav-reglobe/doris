@@ -974,7 +974,9 @@ struct TSchemaScanNode {
   // Captured from the session at plan time, because the FE cannot see the session of the
   // query when the BE calls back into it for schema metadata.
   17: optional bool mysql_compatible_index_metadata = false
-  18: optional list<string> session_role_override // SU-narrowed session's active role subset (SU narrowing: carries the narrowing to the BE->FE metadata RPCs)
+  // SU-narrowed session's active role subset; the BE forwards it on its metadata RPCs
+  // (current_roles on TGetDbsParams / TGetTablesParams / TDescribeTablesParams). Unset = not narrowed.
+  18: optional set<string> current_roles
 }
 
 struct TMetaScanNode {

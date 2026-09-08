@@ -353,7 +353,7 @@ public class SuUserNarrowingTest extends TestWithFeService {
             Assert.assertTrue(canSelectDb(rpcuser, "perso"));
             Assert.assertTrue(canSelectDb(rpcuser, "test"));
 
-            // install exactly what the metadata RPC carries in session_role_override
+            // install exactly what the metadata RPC carries in current_roles
             Auth.setRpcSessionNarrowing(rpcuser, Collections.singleton("rpc_space"));
             Assert.assertFalse(canSelectDb(rpcuser, "perso")); // personal grant DROPPED
             Assert.assertTrue(canSelectDb(rpcuser, "test"));   // requested role KEPT

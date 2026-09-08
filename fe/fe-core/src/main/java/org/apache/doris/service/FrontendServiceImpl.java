@@ -503,14 +503,14 @@ public class FrontendServiceImpl implements FrontendService.Iface {
      * unchanged.
      */
     private static <T> T withSessionRoleOverride(TUserIdentity currentUserIdent, String user, String userIp,
-            List<String> sessionRoleOverride, MetadataRpcHandler<T> handler) throws TException {
-        if (sessionRoleOverride == null) {
+            Set<String> currentRoles, MetadataRpcHandler<T> handler) throws TException {
+        if (currentRoles == null) {
             return handler.run();
         }
         UserIdentity narrowedUser = currentUserIdent != null
                 ? UserIdentity.fromThrift(currentUserIdent)
                 : UserIdentity.createAnalyzedUserIdentWithIp(user, userIp);
-        Auth.setRpcSessionNarrowing(narrowedUser, Sets.newHashSet(sessionRoleOverride));
+        Auth.setRpcSessionNarrowing(narrowedUser, Sets.newHashSet(currentRoles));
         try {
             return handler.run();
         } finally {
@@ -526,7 +526,7 @@ public class FrontendServiceImpl implements FrontendService.Iface {
     @Override
     public TGetDbsResult getDbNames(TGetDbsParams params) throws TException {
         return withSessionRoleOverride(params.current_user_ident, params.user, params.user_ip,
-                params.session_role_override, () -> getDbNamesImpl(params));
+                params.current_roles, () -> getDbNamesImpl(params));
     }
 
     private TGetDbsResult getDbNamesImpl(TGetDbsParams params) throws TException {
@@ -624,7 +624,7 @@ public class FrontendServiceImpl implements FrontendService.Iface {
     @Override
     public TGetTablesResult getTableNames(TGetTablesParams params) throws TException {
         return withSessionRoleOverride(params.current_user_ident, params.user, params.user_ip,
-                params.session_role_override, () -> getTableNamesImpl(params));
+                params.current_roles, () -> getTableNamesImpl(params));
     }
 
     private TGetTablesResult getTableNamesImpl(TGetTablesParams params) throws TException {
@@ -691,7 +691,7 @@ public class FrontendServiceImpl implements FrontendService.Iface {
     @Override
     public TListTableStatusResult listTableStatus(TGetTablesParams params) throws TException {
         return withSessionRoleOverride(params.current_user_ident, params.user, params.user_ip,
-                params.session_role_override, () -> listTableStatusImpl(params));
+                params.current_roles, () -> listTableStatusImpl(params));
     }
 
     private TListTableStatusResult listTableStatusImpl(TGetTablesParams params) throws TException {
@@ -995,7 +995,7 @@ public class FrontendServiceImpl implements FrontendService.Iface {
     @Override
     public TDescribeTablesResult describeTables(TDescribeTablesParams params) throws TException {
         return withSessionRoleOverride(params.current_user_ident, params.user, params.user_ip,
-                params.session_role_override, () -> describeTablesImpl(params));
+                params.current_roles, () -> describeTablesImpl(params));
     }
 
     private TDescribeTablesResult describeTablesImpl(TDescribeTablesParams params) throws TException {
