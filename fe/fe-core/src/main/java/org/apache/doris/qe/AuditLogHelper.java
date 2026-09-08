@@ -49,6 +49,7 @@ import org.apache.doris.qe.QueryState.MysqlStateType;
 import org.apache.doris.resource.workloadgroup.QueueToken;
 import org.apache.doris.service.FrontendOptions;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Strings;
 import com.google.common.collect.Sets;
 import org.apache.commons.codec.digest.DigestUtils;
@@ -218,6 +219,17 @@ public class AuditLogHelper {
         return cnt;
     }
 
+    /**
+     * The account that authenticated the connection: the switcher of a session-narrowed (SU) session,
+     * otherwise the session user itself. Never null, so the audit row always names who logged in.
+     */
+    @VisibleForTesting
+    static String authenticatedUser(ConnectContext ctx) {
+        String user = ctx.getAuthenticatedIdentity() == null
+                ? ctx.getQualifiedUser() : ctx.getAuthenticatedIdentity().getQualifiedUser();
+        return user == null ? "" : user;
+    }
+
     private static void logAuditLogImpl(ConnectContext ctx, String origStmt, StatementBase parsedStmt,
             org.apache.doris.proto.Data.PQueryStatistics statistics, boolean printFuzzyVariables) {
         // slow query
@@ -246,6 +258,7 @@ public class AuditLogHelper {
                 .setTimestamp(ctx.getStartTime())
                 .setClientIp(ctx.getClientIP())
                 .setUser(ctx.getQualifiedUser())
+                .setAuthenticatedUser(authenticatedUser(ctx))
                 .setFeIp(FrontendOptions.getLocalHostAddress())
                 .setCtl(catalog == null ? InternalCatalog.INTERNAL_CATALOG_NAME : catalog.getName())
                 .setDb(ctx.getDatabase())
