@@ -420,10 +420,12 @@ struct TMasterOpRequest {
     32: optional bool moreResultExists // Server has more result to send
     33: optional map<string, string> connect_attributes
 
-    // Reserved for downstream fields `current_roles` and `is_su_user` to keep
-    // thrift field ids wire-compatible across maintained branches. Do not reuse these ids.
-    34: optional set<string> reserved_field_34
-    35: optional bool reserved_field_35
+    // Session-narrowed (SU) session: the active role subset that REPLACES the target's role
+    // union while the master executes this statement, and the flag that the session is
+    // switched. A switched session that carries no role list narrows to the empty set on the
+    // master (fail closed). Ids 34/35 were reserved for exactly these fields.
+    34: optional set<string> current_roles
+    35: optional bool is_su_user
 
     // selectdb cloud
     1000: optional string cloud_cluster
