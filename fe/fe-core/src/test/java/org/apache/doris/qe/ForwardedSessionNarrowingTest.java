@@ -54,7 +54,7 @@ public class ForwardedSessionNarrowingTest extends TestWithFeService {
     }
 
     private boolean canSelectDb(UserIdentity user, String db) {
-        return Env.getCurrentEnv().getAuth().checkDbPriv(user, CTL, db, PrivPredicate.SELECT);
+        return Env.getCurrentEnv().getAccessManager().checkDbPriv(user, CTL, db, PrivPredicate.SELECT);
     }
 
     private static TMasterOpRequest forwardRequestOf(ConnectContext ctx) throws AnalysisException {
