@@ -949,9 +949,10 @@ struct TMetadataTableRequestParams {
   12: optional PlanNodes.TMetaCacheStatsParams meta_cache_stats_params
   13: optional PlanNodes.TPartitionValuesMetadataParams partition_values_metadata_params
   14: optional PlanNodes.THudiMetadataParams hudi_metadata_params
-  // Reserved for downstream field `current_roles` to keep thrift field ids
-  // wire-compatible across maintained branches. Do not reuse this id.
-  15: optional set<string> reserved_field_15
+  // Session-narrowed (SU) session: the active role subset the calling session runs under, so
+  // the handler narrows its privilege checks to that set. Unset = not narrowed. This id was
+  // reserved for exactly this field.
+  15: optional set<string> current_roles
 }
 
 struct TSchemaTableRequestParams {
@@ -963,9 +964,10 @@ struct TSchemaTableRequestParams {
     6: optional string time_zone // used for DATETIME field
     7: optional string frontend_conjuncts
     8: optional i64 thread_id // mysql connection id for fetching ConnectContext if needed
-    // Reserved for downstream field `current_roles` to keep thrift field ids
-    // wire-compatible across maintained branches. Do not reuse this id.
-    9: optional set<string> reserved_field_9
+    // Session-narrowed (SU) session: the active role subset the calling session runs under, so
+    // the handler narrows its privilege checks to that set. Unset = not narrowed. This id was
+    // reserved for exactly this field.
+    9: optional set<string> current_roles
     // The one table the query asked for, when it pinned one with `TABLE_NAME = '...'`.
     // Lets the FE answer from that table instead of walking the whole database.
     10: optional string table_name
@@ -1609,9 +1611,10 @@ struct TShowProcessListRequest {
     1: optional bool show_full_sql
     2: optional Types.TUserIdentity current_user_ident
     3: optional string time_zone
-    // Reserved for downstream field `current_roles` to keep thrift field ids
-    // wire-compatible across maintained branches. Do not reuse this id.
-    4: optional set<string> reserved_field_4
+    // Session-narrowed (SU) session: the active role subset the calling session runs under, so
+    // the handler narrows its privilege checks to that set. Unset = not narrowed. This id was
+    // reserved for exactly this field.
+    4: optional set<string> current_roles
 }
 
 struct TShowProcessListResult {

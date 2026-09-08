@@ -983,6 +983,9 @@ struct TMetaScanNode {
   1: required Types.TTupleId tuple_id
   2: optional Types.TMetadataType metadata_type
   3: optional Types.TUserIdentity current_user_ident
+  // SU-narrowed session's active role subset; the BE forwards it on its metadata RPCs
+  // (current_roles on TMetadataTableRequestParams). Unset = not narrowed.
+  4: optional set<string> current_roles
 }
 
 struct TTestExternalScanNode {
