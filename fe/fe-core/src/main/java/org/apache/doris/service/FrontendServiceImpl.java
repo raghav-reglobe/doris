@@ -3408,6 +3408,28 @@ public class FrontendServiceImpl implements FrontendService.Iface {
 
     @Override
     public TFetchSchemaTableDataResult fetchSchemaTableData(TFetchSchemaTableDataRequest request) throws TException {
+        // information_schema tables and metadata table functions: the request names the caller and,
+        // for a session-narrowed (SU) session, the active role subset; MetadataGenerator's privilege
+        // checks then resolve that set instead of the caller's full role union.
+        TUserIdentity currentUserIdent = null;
+        Set<String> currentRoles = null;
+        if (request.isSetSchemaTableParams()) {
+            currentUserIdent = request.getSchemaTableParams().current_user_ident;
+            currentRoles = request.getSchemaTableParams().current_roles;
+        } else if (request.isSetMetadaTableParams()) {
+            currentUserIdent = request.getMetadaTableParams().current_user_ident;
+            currentRoles = request.getMetadaTableParams().current_roles;
+        }
+        if (currentRoles != null && currentUserIdent == null) {
+            // a narrowed request must say whom it narrows; never fall back to the full role union
+            return MetadataGenerator.errorResult("current user ident is not set for a narrowed request");
+        }
+        return withSessionRoleOverride(currentUserIdent, null, null, currentRoles,
+                () -> fetchSchemaTableDataImpl(request));
+    }
+
+    private TFetchSchemaTableDataResult fetchSchemaTableDataImpl(TFetchSchemaTableDataRequest request)
+            throws TException {
         try {
             if (!request.isSetSchemaTableName()) {
                 return MetadataGenerator.errorResult("Fetch schema table name is not set");
@@ -5658,7 +5680,14 @@ public class FrontendServiceImpl implements FrontendService.Iface {
     }
 
     @Override
-    public TShowProcessListResult showProcessList(TShowProcessListRequest request) {
+    public TShowProcessListResult showProcessList(TShowProcessListRequest request) throws TException {
+        // a narrowed session's ADMIN check inside listConnectionForRpc resolves the narrowed set, so a
+        // tenant-narrowed administrator sees only the sessions of the identity it runs as
+        return withSessionRoleOverride(request.current_user_ident, null, null, request.current_roles,
+                () -> showProcessListImpl(request));
+    }
+
+    private TShowProcessListResult showProcessListImpl(TShowProcessListRequest request) {
         boolean isShowFullSql = false;
         if (request.isSetShowFullSql()) {
             isShowFullSql = request.isShowFullSql();
