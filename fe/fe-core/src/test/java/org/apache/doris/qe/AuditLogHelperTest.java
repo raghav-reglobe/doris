@@ -25,6 +25,7 @@ import org.apache.doris.metric.MetricRepo;
 import org.junit.Assert;
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.junit.jupiter.api.Assertions;
 
 public class AuditLogHelperTest {
 

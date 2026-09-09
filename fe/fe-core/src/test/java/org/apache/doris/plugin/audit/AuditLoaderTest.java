@@ -24,6 +24,7 @@ import org.apache.doris.plugin.AuditEvent;
 
 import org.junit.Assert;
 import org.junit.Test;
+import org.junit.jupiter.api.Assertions;
 
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
