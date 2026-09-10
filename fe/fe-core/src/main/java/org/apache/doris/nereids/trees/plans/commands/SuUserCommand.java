@@ -55,6 +55,9 @@ import java.util.Set;
  *     session can never exceed the person's real authority.</li>
  * <li>One-shot: a switched session cannot SU again, and nothing widens it. A connection reset
  *     reverts to the authenticated identity ({@link ConnectContext#revertSessionNarrowing}).</li>
+ * <li>An account lock ({@code ALTER USER ... ACCOUNT_LOCK}) is an authentication check, as in MySQL
+ *     proxy authentication: it refuses the target's own logins, not a switch into the target by a
+ *     {@code PROXY_PRIV} holder. To stop a switcher, lock it or revoke its {@code PROXY_PRIV}.</li>
  * </ul>
  */
 public class SuUserCommand extends Command implements NoForward {
