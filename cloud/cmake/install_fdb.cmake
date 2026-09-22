@@ -51,6 +51,15 @@ set(FDB_CONFIG_7_1_57_AARCH64_CENTOS_FILE "fdb_lib_7_1_57.aarch64.tar.xz")
 set(FDB_CONFIG_7_1_57_AARCH64_CENTOS_MD5 "2d01a431b7a7465077e4ae5520f89693")
 set(FDB_CONFIG_7_1_57_AARCH64_CENTOS_URL "https://doris-build.oss-cn-beijing.aliyuncs.com/thirdparty/fdb/aarch64/")
 
+# Version 7.1.57 - AARCH64 - UBUNTU
+# Same prebuilt aarch64 client as the CENTOS row above (the tarball is the
+# FDB C client + headers, not an OS package). Without this row an aarch64
+# build on an Ubuntu image fails at configure time in download_and_setup_fdb's
+# own FATAL_ERROR, because FDB_OS_RELEASE is detected as UBUNTU.
+set(FDB_CONFIG_7_1_57_AARCH64_UBUNTU_FILE "fdb_lib_7_1_57.aarch64.tar.xz")
+set(FDB_CONFIG_7_1_57_AARCH64_UBUNTU_MD5 "2d01a431b7a7465077e4ae5520f89693")
+set(FDB_CONFIG_7_1_57_AARCH64_UBUNTU_URL "https://doris-build.oss-cn-beijing.aliyuncs.com/thirdparty/fdb/aarch64/")
+
 # Version 7.1.57 - AMD64 - UBUNTU
 set(FDB_CONFIG_7_1_57_AMD64_UBUNTU_FILE "fdb_lib_7_1_57.tar.xz")
 set(FDB_CONFIG_7_1_57_AMD64_UBUNTU_MD5 "5a4aec35de0e041b952a3e39078f327a")
@@ -68,6 +77,11 @@ set(FDB_CONFIG_7_3_69_API_VERSION "730")
 set(FDB_CONFIG_7_3_69_AARCH64_CENTOS_FILE "fdb_lib_7_3_69.tar.xz")
 set(FDB_CONFIG_7_3_69_AARCH64_CENTOS_MD5 "7c6c676b41c70ef31eca617de7879364")
 set(FDB_CONFIG_7_3_69_AARCH64_CENTOS_URL "https://doris-build.oss-cn-beijing.aliyuncs.com/thirdparty/fdb/aarch64/")
+
+# Version 7.3.69 - AARCH64 - UBUNTU
+set(FDB_CONFIG_7_3_69_AARCH64_UBUNTU_FILE "fdb_lib_7_3_69.tar.xz")
+set(FDB_CONFIG_7_3_69_AARCH64_UBUNTU_MD5 "7c6c676b41c70ef31eca617de7879364")
+set(FDB_CONFIG_7_3_69_AARCH64_UBUNTU_URL "https://doris-build.oss-cn-beijing.aliyuncs.com/thirdparty/fdb/aarch64/")
 
 # Version 7.3.69 - AMD64 - UBUNTU
 set(FDB_CONFIG_7_3_69_AMD64_UBUNTU_FILE "fdb_lib_7_3_69.tar.xz")
