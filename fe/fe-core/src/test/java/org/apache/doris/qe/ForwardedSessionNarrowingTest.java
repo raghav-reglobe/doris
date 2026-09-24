@@ -22,6 +22,8 @@ import org.apache.doris.catalog.Env;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.datasource.InternalCatalog;
 import org.apache.doris.mysql.privilege.PrivPredicate;
+import org.apache.doris.system.Frontend;
+import org.apache.doris.ha.FrontendNodeType;
 import org.apache.doris.thrift.TMasterOpRequest;
 import org.apache.doris.thrift.TNetworkAddress;
 import org.apache.doris.utframe.TestWithFeService;
@@ -30,6 +32,8 @@ import com.google.common.collect.Sets;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.util.Collections;
 
 /**
@@ -148,5 +152,20 @@ public class ForwardedSessionNarrowingTest extends TestWithFeService {
         // the single-FE test environment is its own master: nothing to forward, nothing to refuse
         Assertions.assertTrue(Env.getCurrentEnv().isMaster());
         Assertions.assertTrue(Env.getCurrentEnv().masterRunsSameBuild());
+    }
+
+    @Test
+    public void testTheMasterIsToldApartByResolvedAddressNotByHostString() throws Exception {
+        // enable_fqdn_mode: the frontend list carries the NAME, the leader record carries the IP it resolves to.
+        // Prod 2026-09-24: doris-fe-1.doris-fe-headless... vs 10.10.66.108 - a string compare never matched and every
+        // narrowed GRANT a follower had to forward failed closed with "master runs a different build" on identical builds.
+        String ip = InetAddress.getByName("localhost").getHostAddress();
+        Frontend byName = new Frontend(FrontendNodeType.FOLLOWER, "fe_by_name", "localhost", 9010);
+        Assertions.assertFalse("localhost".equals(ip));
+        Assertions.assertTrue(Env.isLeader(byName, new InetSocketAddress(ip, 9010)));
+        Assertions.assertFalse(Env.isLeader(byName, new InetSocketAddress(ip, 9011)));     // another edit-log port is another node
+        Assertions.assertFalse(Env.isLeader(byName, null));                                 // no leader known = no match, fail closed
+        Frontend other = new Frontend(FrontendNodeType.FOLLOWER, "fe_other", "no-such-host.invalid", 9010);
+        Assertions.assertFalse(Env.isLeader(other, new InetSocketAddress(ip, 9010)));      // an unresolvable name never matches an IP
     }
 }

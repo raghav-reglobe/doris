@@ -305,6 +305,7 @@ import org.apache.doris.transaction.GlobalTransactionMgrIface;
 import org.apache.doris.transaction.PublishVersionDaemon;
 import org.apache.doris.tso.TSOService;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
@@ -5461,19 +5462,46 @@ public class Env {
      * role narrowing: the master is upgraded last in a rolling upgrade, so a newer follower must not
      * hand such a statement to a master that cannot apply the field. An unknown or dead master is
      * treated as a different build.
+     *
+     * The master is told apart by its RESOLVED address (host + edit-log port), the way SHOW FRONTENDS
+     * does: with enable_fqdn_mode the frontend list carries FQDNs while the master's own record carries
+     * the IP it started with, so a host-string compare never matched and every narrowed statement a
+     * follower had to forward failed closed although both FEs ran the same build.
      */
     public boolean masterRunsSameBuild() {
         if (isMaster()) {
             return true;
         }
+        Frontend master = masterFrontend();
+        return master != null && master.isAlive() && Frontend.localBuildVersion().equals(master.getVersion());
+    }
+
+    /** The frontend-list entry that is the current master, or null when none can be told apart. */
+    private Frontend masterFrontend() {
+        InetSocketAddress leader = null;
+        try {
+            leader = getHaProtocol().getLeader();
+        } catch (Exception e) {
+            LOG.warn("failed to get leader while matching the master frontend: {}", e.getMessage());
+        }
         String masterHost = getMasterHost();
         int masterRpcPort = getMasterRpcPort();
         for (Frontend fe : frontends.values()) {
-            if (fe.getHost().equals(masterHost) && fe.getRpcPort() == masterRpcPort) {
-                return fe.isAlive() && Frontend.localBuildVersion().equals(fe.getVersion());
+            if (isLeader(fe, leader) || (fe.getHost().equals(masterHost) && fe.getRpcPort() == masterRpcPort)) {
+                return fe;
             }
         }
-        return false;
+        return null;
+    }
+
+    /**
+     * SHOW FRONTENDS' rule for "is this frontend the leader": compare resolved socket addresses, never
+     * host strings — a name and the IP it resolves to are the same node, and so are two spellings of
+     * one IPv6 address. No leader known = no match.
+     */
+    @VisibleForTesting
+    public static boolean isLeader(Frontend fe, InetSocketAddress leader) {
+        return leader != null && new InetSocketAddress(fe.getHost(), fe.getEditLogPort()).equals(leader);
     }
 
 
