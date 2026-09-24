@@ -40,6 +40,9 @@ public class FrontendHbResponse extends HeartbeatResponse implements Writable {
     private int arrowFlightSqlPort;
     @SerializedName(value = "replayedJournalId")
     private long replayedJournalId;
+    // Journaled: a follower learns another FE's build only from the replayed heartbeat (the master alone runs heartbeats),
+    // and the SU forward gate compares builds on the follower - without this annotation every follower held null here.
+    @SerializedName(value = "version")
     private String version;
     private long feStartTime;
     private long processUUID;

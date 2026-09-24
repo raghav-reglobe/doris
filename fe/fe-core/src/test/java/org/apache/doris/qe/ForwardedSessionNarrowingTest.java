@@ -23,7 +23,9 @@ import org.apache.doris.common.AnalysisException;
 import org.apache.doris.datasource.InternalCatalog;
 import org.apache.doris.ha.FrontendNodeType;
 import org.apache.doris.mysql.privilege.PrivPredicate;
+import org.apache.doris.persist.gson.GsonUtils;
 import org.apache.doris.system.Frontend;
+import org.apache.doris.system.FrontendHbResponse;
 import org.apache.doris.thrift.TMasterOpRequest;
 import org.apache.doris.thrift.TNetworkAddress;
 import org.apache.doris.utframe.TestWithFeService;
@@ -167,5 +169,23 @@ public class ForwardedSessionNarrowingTest extends TestWithFeService {
         Assertions.assertFalse(Env.isLeader(byName, null));                                 // no leader known = no match, fail closed
         Frontend other = new Frontend(FrontendNodeType.FOLLOWER, "fe_other", "no-such-host.invalid", 9010);
         Assertions.assertFalse(Env.isLeader(other, new InetSocketAddress(ip, 9010)));      // an unresolvable name never matches an IP
+    }
+
+    @Test
+    public void testAFollowerLearnsTheMastersBuildFromTheReplayedHeartbeat() {
+        // Only the master runs heartbeats; a follower's copy of another FE's version comes from the JOURNALED response it
+        // replays. Prod 2026-09-24: every follower held null there (the field was not serialized), so the SU forward gate
+        // compared the local build against null and failed closed on identical builds - with the master's own SHOW FRONTENDS
+        // (forwarded, so served from the master's live view) hiding it.
+        String build = Frontend.localBuildVersion();
+        FrontendHbResponse sent = new FrontendHbResponse("fe_master", 9030, 9010, 8040, 42L, System.currentTimeMillis(), build,
+                123L, null, 7L, null);
+        FrontendHbResponse replayed = GsonUtils.GSON.fromJson(GsonUtils.GSON.toJson(sent), FrontendHbResponse.class);
+        Assertions.assertEquals(build, replayed.getVersion());
+        Frontend master = new Frontend(FrontendNodeType.FOLLOWER, "fe_master", "localhost", 9020);
+        master.handleHbResponse(replayed, true);
+        Assertions.assertTrue(master.isAlive());
+        Assertions.assertEquals(build, master.getVersion());
+        Assertions.assertTrue(Frontend.localBuildVersion().equals(master.getVersion()));   // the compare the forward gate makes
     }
 }
