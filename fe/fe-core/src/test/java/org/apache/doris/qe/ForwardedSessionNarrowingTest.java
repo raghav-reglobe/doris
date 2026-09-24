@@ -21,13 +21,12 @@ import org.apache.doris.analysis.UserIdentity;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.datasource.InternalCatalog;
+import org.apache.doris.ha.FrontendNodeType;
 import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.system.Frontend;
-import org.apache.doris.ha.FrontendNodeType;
 import org.apache.doris.thrift.TMasterOpRequest;
 import org.apache.doris.thrift.TNetworkAddress;
 import org.apache.doris.utframe.TestWithFeService;
-
 import com.google.common.collect.Sets;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
