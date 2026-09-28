@@ -39,7 +39,6 @@ import com.google.common.collect.Lists;
 
 import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 public class MetadataScanNode extends ExternalScanNode {
 
@@ -69,9 +68,8 @@ public class MetadataScanNode extends ExternalScanNode {
         metaScanNode.setCurrentUserIdent(tCurrentUser);
         // SU narrowing: carry the session's active role subset so the BE->FE metadata requests
         // narrow their privilege checks to the same set the session sees; null = not narrowed.
-        Set<String> sessionRoleOverride = ConnectContext.get().getSessionRoleOverride();
-        if (sessionRoleOverride != null) {
-            metaScanNode.setCurrentRoles(new HashSet<>(sessionRoleOverride));
+        if (ConnectContext.get().isSessionRoleNarrowed()) {
+            metaScanNode.setCurrentRoles(new HashSet<>(ConnectContext.get().getSessionRoleOverride()));
         }
         planNode.setMetaScanNode(metaScanNode);
     }

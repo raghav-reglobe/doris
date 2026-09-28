@@ -47,7 +47,6 @@ import org.apache.logging.log4j.Logger;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 /**
  * Full scan of an SCHEMA table.
@@ -167,9 +166,8 @@ public class SchemaScanNode extends ScanNode {
         // SU narrowing: carry the session's active role subset (current_roles) in the plan so the
         // BE->FE metadata RPCs (getDbNames/getTableNames/listTableStatus/describeTables) narrow
         // name visibility to the same set the session sees; null = normal session (no narrowing).
-        Set<String> sessionRoleOverride = ConnectContext.get().getSessionRoleOverride();
-        if (sessionRoleOverride != null) {
-            msg.schema_scan_node.setCurrentRoles(new HashSet<>(sessionRoleOverride));
+        if (ConnectContext.get().isSessionRoleNarrowed()) {
+            msg.schema_scan_node.setCurrentRoles(new HashSet<>(ConnectContext.get().getSessionRoleOverride()));
         }
         msg.schema_scan_node.setFrontendConjuncts(GsonUtils.GSON.toJson(frontendConjuncts));
         setFeAddrList(msg);
