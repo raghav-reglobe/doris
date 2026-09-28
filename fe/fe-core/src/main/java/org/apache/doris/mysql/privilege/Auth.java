@@ -345,8 +345,8 @@ public class Auth implements Writable {
         }
         ConnectContext ctx = ConnectContext.get();
         if (ctx != null && userIdentity.equals(ctx.getCurrentUserIdentity())) {
-            Set<String> sessionRoleOverride = ctx.getSessionRoleOverride();
-            if (sessionRoleOverride != null) {
+            if (ctx.isSessionRoleNarrowed()) {
+                Set<String> sessionRoleOverride = ctx.getSessionRoleOverride();
                 // SU-narrowed session: the override REPLACES every role source (user grants, LDAP,
                 // authenticated roles); SuUserCommand enforced the ceiling at switch time. Return the
                 // override roles + the information_schema/mysql read baseline (see narrowedRoleSet).
@@ -427,7 +427,7 @@ public class Auth implements Writable {
     private Set<Role> getRolesForWorkloadGroupCheck(UserIdentity userIdentity) {
         Set<Role> roles = getRolesByUserWithLdap(userIdentity);
         ConnectContext ctx = ConnectContext.get();
-        if (ctx == null || ctx.getSessionRoleOverride() == null
+        if (ctx == null || !ctx.isSessionRoleNarrowed()
                 || !userIdentity.equals(ctx.getCurrentUserIdentity())) {
             return roles;
         }

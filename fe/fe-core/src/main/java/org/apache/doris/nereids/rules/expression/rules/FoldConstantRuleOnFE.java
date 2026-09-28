@@ -398,7 +398,7 @@ public class FoldConstantRuleOnFE extends AbstractExpressionRewriteRule
     @Override
     public Expression visitSessionIsNarrowed(SessionIsNarrowed fn, ExpressionRewriteContext context) {
         ConnectContext cctx = context.cascadesContext.getConnectContext();
-        return BooleanLiteral.of(cctx != null && cctx.getSessionRoleOverride() != null);
+        return BooleanLiteral.of(cctx != null && cctx.isSessionRoleNarrowed());
     }
 
     @Override
