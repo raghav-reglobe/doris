@@ -23,6 +23,7 @@
 #include <utility>
 #include <vector>
 
+#include "common/config.h"
 #include "core/assert_cast.h"
 #include "core/data_type/data_type_array.h"
 #include "core/data_type/data_type_map.h"
@@ -443,10 +444,89 @@ TEST(ParquetSchemaTest, NativeVariantValidatesEveryShreddedWrapperAndScalar) {
     EXPECT_TRUE(unsigned_status.is<ErrorCode::CORRUPTION>()) << unsigned_status;
     EXPECT_NE(unsigned_status.to_string().find("unsigned"), std::string::npos);
 
+    const bool lenient = config::parquet_variant_lenient_legacy_layout;
+    config::parquet_variant_lenient_legacy_layout = false;
     const auto optional_wrapper_status =
             descriptor.parse_from_thrift(shredded_object_variant_schema(true, false));
+    config::parquet_variant_lenient_legacy_layout = lenient;
     EXPECT_TRUE(optional_wrapper_status.is<ErrorCode::CORRUPTION>()) << optional_wrapper_status;
     EXPECT_NE(optional_wrapper_status.to_string().find("wrapper"), std::string::npos);
+}
+
+namespace {
+
+tparquet::SchemaElement decimal_typed_value(tparquet::Type::type physical, int32_t precision,
+                                            int32_t scale) {
+    tparquet::SchemaElement typed_value;
+    typed_value.__set_type(physical);
+    typed_value.__set_logicalType(tparquet::LogicalType());
+    typed_value.logicalType.__set_DECIMAL(tparquet::DecimalType());
+    typed_value.logicalType.DECIMAL.__set_precision(precision);
+    typed_value.logicalType.DECIMAL.__set_scale(scale);
+    return typed_value;
+}
+
+std::vector<tparquet::SchemaElement> optional_value_variant_schema() {
+    auto schema = unshredded_variant_schema();
+    schema[3].__set_repetition_type(tparquet::FieldRepetitionType::OPTIONAL);
+    return schema;
+}
+
+} // namespace
+
+// Three layouts that pre-spec writers left in existing files: an OPTIONAL shredded wrapper
+// (DuckDB, early parquet-rs), an OPTIONAL canonical value with no typed_value (an early
+// compaction writer), and a DECIMAL leaf physically wider than the spec table (parquet-rs 59.0.0
+// writes a precision-1 decimal as INT64). The decode path handles all three; the validator
+// accepts them only under parquet_variant_lenient_legacy_layout and keeps refusing layouts that
+// cannot be decoded (a physical type narrower than the precision).
+TEST(ParquetSchemaTest, NativeVariantLenientLegacyLayoutAcceptsPreSpecWriters) {
+    const bool saved = config::parquet_variant_lenient_legacy_layout;
+    const auto wide_decimal = shredded_primitive_variant_schema(
+            decimal_typed_value(tparquet::Type::INT64, 1, 1));
+    const auto narrow_decimal = shredded_primitive_variant_schema(
+            decimal_typed_value(tparquet::Type::INT32, 10, 2));
+
+    config::parquet_variant_lenient_legacy_layout = true;
+    {
+        NativeFieldDescriptor descriptor;
+        const auto status = descriptor.parse_from_thrift(shredded_object_variant_schema(true, false));
+        EXPECT_TRUE(status.ok()) << status;
+    }
+    {
+        NativeFieldDescriptor descriptor;
+        const auto status = descriptor.parse_from_thrift(optional_value_variant_schema());
+        EXPECT_TRUE(status.ok()) << status;
+        std::vector<std::unique_ptr<ParquetColumnSchema>> fields;
+        descriptor.assign_ids();
+        EXPECT_TRUE(build_parquet_column_schema(descriptor, &fields).ok());
+        ASSERT_EQ(fields.size(), 1);
+        EXPECT_EQ(fields[0]->kind, ParquetColumnSchemaKind::VARIANT);
+    }
+    {
+        NativeFieldDescriptor descriptor;
+        const auto status = descriptor.parse_from_thrift(wide_decimal);
+        EXPECT_TRUE(status.ok()) << status;
+        const auto narrow = NativeFieldDescriptor().parse_from_thrift(narrow_decimal);
+        EXPECT_TRUE(narrow.is<ErrorCode::CORRUPTION>()) << narrow;
+    }
+
+    config::parquet_variant_lenient_legacy_layout = false;
+    {
+        const auto wrapper = NativeFieldDescriptor().parse_from_thrift(
+                shredded_object_variant_schema(true, false));
+        EXPECT_TRUE(wrapper.is<ErrorCode::CORRUPTION>()) << wrapper;
+        EXPECT_NE(wrapper.to_string().find("must be required"), std::string::npos);
+        const auto value = NativeFieldDescriptor().parse_from_thrift(optional_value_variant_schema());
+        EXPECT_TRUE(value.is<ErrorCode::CORRUPTION>()) << value;
+        EXPECT_NE(value.to_string().find("value must be a required"), std::string::npos);
+        const auto wide = NativeFieldDescriptor().parse_from_thrift(wide_decimal);
+        EXPECT_TRUE(wide.is<ErrorCode::CORRUPTION>()) << wide;
+        EXPECT_NE(wide.to_string().find("does not match physical type"), std::string::npos);
+        const auto narrow = NativeFieldDescriptor().parse_from_thrift(narrow_decimal);
+        EXPECT_TRUE(narrow.is<ErrorCode::CORRUPTION>()) << narrow;
+    }
+    config::parquet_variant_lenient_legacy_layout = saved;
 }
 
 TEST(ParquetSchemaTest, NativeVariantRejectsDuplicateObjectFieldNames) {

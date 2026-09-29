@@ -17,6 +17,8 @@
 
 #include "format_v2/parquet/native_schema_desc.h"
 
+#include "common/config.h"
+
 #include <ctype.h>
 
 #include <algorithm>
@@ -187,11 +189,17 @@ static Status validate_variant_decimal(const tparquet::SchemaElement& schema,
         return Status::Corruption("Parquet Variant DECIMAL({}, {}) is invalid", precision, scale);
     }
 
-    if ((physical_type == tparquet::Type::INT32 && precision > 9) ||
-        (physical_type == tparquet::Type::INT64 && (precision < 10 || precision > 18)) ||
-        ((physical_type == tparquet::Type::BYTE_ARRAY ||
-          physical_type == tparquet::Type::FIXED_LEN_BYTE_ARRAY) &&
-         precision < 19)) {
+    // A physical type NARROWER than the precision needs is never decodable; a WIDER one is (the
+    // leaf reads into DECIMAL128 and the Variant width comes from the logical precision), so the
+    // lenient legacy mode only relaxes the "too wide" direction. INT32 above 9 stays a corruption.
+    const bool too_narrow = physical_type == tparquet::Type::INT32 && precision > 9;
+    const bool too_wide_for_spec =
+            (physical_type == tparquet::Type::INT64 && precision < 10) ||
+            ((physical_type == tparquet::Type::BYTE_ARRAY ||
+              physical_type == tparquet::Type::FIXED_LEN_BYTE_ARRAY) &&
+             precision < 19);
+    if (too_narrow || (physical_type == tparquet::Type::INT64 && precision > 18) ||
+        (too_wide_for_spec && !config::parquet_variant_lenient_legacy_layout)) {
         return Status::Corruption(
                 "Parquet Variant DECIMAL precision {} does not match physical type {}", precision,
                 physical_type);
@@ -344,8 +352,14 @@ Status validate_variant_layout(const NativeFieldSchema& group_field,
                                                    : tparquet::FieldRepetitionType::OPTIONAL;
     // SQL nullability belongs to the outer Variant group. Only shredding makes value optional,
     // because typed_value may carry all or part of the logical value instead.
+    // Legacy canonical files (no typed_value) may carry an OPTIONAL value; the reader maps a null
+    // value slot to a Variant null, so accept it in lenient mode.
+    const bool legacy_optional_value =
+            config::parquet_variant_lenient_legacy_layout && typed_value == nullptr &&
+            value->parquet_schema.repetition_type == tparquet::FieldRepetitionType::OPTIONAL;
     if (!value->children.empty() || value->physical_type != tparquet::Type::BYTE_ARRAY ||
-        value->parquet_schema.repetition_type != expected_value_repetition) {
+        (value->parquet_schema.repetition_type != expected_value_repetition &&
+         !legacy_optional_value)) {
         return Status::Corruption("Parquet Variant {} value must be a {} BYTE_ARRAY",
                                   group_field.name,
                                   typed_value == nullptr ? "required" : "optional");
@@ -360,8 +374,18 @@ Status validate_variant_layout(const NativeFieldSchema& group_field,
     std::function<Status(const NativeFieldSchema&)> validate_typed_value;
     std::function<Status(const NativeFieldSchema&, WrapperContext)> validate_wrapper;
     validate_wrapper = [&](const NativeFieldSchema& wrapper, WrapperContext context) -> Status {
+        // The spec wants REQUIRED wrappers (presence = both children null). Legacy writers emitted
+        // OPTIONAL ones; the reader treats a null wrapper exactly like an absent field, so accept
+        // them in lenient mode. REPEATED is never a wrapper.
+        const auto wrapper_repetition = wrapper.parquet_schema.__isset.repetition_type
+                                                ? wrapper.parquet_schema.repetition_type
+                                                : tparquet::FieldRepetitionType::REQUIRED;
+        const bool legacy_optional_wrapper =
+                config::parquet_variant_lenient_legacy_layout &&
+                wrapper_repetition == tparquet::FieldRepetitionType::OPTIONAL;
         if (!wrapper.parquet_schema.__isset.repetition_type ||
-            wrapper.parquet_schema.repetition_type != tparquet::FieldRepetitionType::REQUIRED) {
+            (wrapper_repetition != tparquet::FieldRepetitionType::REQUIRED &&
+             !legacy_optional_wrapper)) {
             return Status::Corruption("Parquet Variant shredded wrapper {} must be required",
                                       wrapper.name);
         }
