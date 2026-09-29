@@ -409,7 +409,11 @@ TEST(ParquetSchemaTest, NativeSchemaRejectsUnsupportedVariantVersionAndMalformed
 
     auto optional_unshredded_value = unshredded_variant_schema();
     optional_unshredded_value[3].__set_repetition_type(tparquet::FieldRepetitionType::OPTIONAL);
+    // The strict rule; the lenient legacy mode accepts this layout (covered separately).
+    const bool lenient = config::parquet_variant_lenient_legacy_layout;
+    config::parquet_variant_lenient_legacy_layout = false;
     const auto repetition_status = descriptor.parse_from_thrift(optional_unshredded_value);
+    config::parquet_variant_lenient_legacy_layout = lenient;
     EXPECT_TRUE(repetition_status.is<ErrorCode::CORRUPTION>()) << repetition_status;
     EXPECT_NE(repetition_status.to_string().find("required BYTE_ARRAY"), std::string::npos);
 }
