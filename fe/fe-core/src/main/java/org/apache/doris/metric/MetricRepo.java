@@ -121,6 +121,10 @@ public final class MetricRepo {
     public static LongCounterMetric COUNTER_QUERY_ALL;
     public static LongCounterMetric COUNTER_QUERY_ERR;
     public static LongCounterMetric COUNTER_SECONDARY_PASSWORD_AUTH;
+    public static LongCounterMetric COUNTER_MYSQL_COMPRESSED_CONNECTIONS;
+    public static LongCounterMetric COUNTER_MYSQL_COMPRESSED_SEND_RAW_BYTES;
+    public static LongCounterMetric COUNTER_MYSQL_COMPRESSED_SEND_BYTES;
+    public static LongCounterMetric COUNTER_MYSQL_COMPRESSED_RECV_BYTES;
     public static LongCounterMetric COUNTER_QUERY_SLOW;
     public static LongCounterMetric COUNTER_QUERY_TABLE;
     public static LongCounterMetric COUNTER_QUERY_OLAP_TABLE;
@@ -552,6 +556,18 @@ public final class MetricRepo {
         COUNTER_SECONDARY_PASSWORD_AUTH = new LongCounterMetric("secondary_password_auth_total",
                 MetricUnit.REQUESTS, "total authentications with a retained secondary password");
         DORIS_METRIC_REGISTER.addMetrics(COUNTER_SECONDARY_PASSWORD_AUTH);
+        COUNTER_MYSQL_COMPRESSED_CONNECTIONS = new LongCounterMetric("mysql_compressed_connections_total",
+                MetricUnit.CONNECTIONS, "MySQL connections that negotiated the compressed protocol");
+        DORIS_METRIC_REGISTER.addMetrics(COUNTER_MYSQL_COMPRESSED_CONNECTIONS);
+        COUNTER_MYSQL_COMPRESSED_SEND_RAW_BYTES = new LongCounterMetric("mysql_compressed_send_raw_bytes",
+                MetricUnit.BYTES, "bytes handed to the MySQL compressed protocol before compression");
+        DORIS_METRIC_REGISTER.addMetrics(COUNTER_MYSQL_COMPRESSED_SEND_RAW_BYTES);
+        COUNTER_MYSQL_COMPRESSED_SEND_BYTES = new LongCounterMetric("mysql_compressed_send_bytes",
+                MetricUnit.BYTES, "bytes of compressed frames sent to MySQL clients, headers included");
+        DORIS_METRIC_REGISTER.addMetrics(COUNTER_MYSQL_COMPRESSED_SEND_BYTES);
+        COUNTER_MYSQL_COMPRESSED_RECV_BYTES = new LongCounterMetric("mysql_compressed_recv_bytes",
+                MetricUnit.BYTES, "bytes of compressed frames received from MySQL clients, headers included");
+        DORIS_METRIC_REGISTER.addMetrics(COUNTER_MYSQL_COMPRESSED_RECV_BYTES);
         COUNTER_QUERY_SLOW = new LongCounterMetric("query_slow", MetricUnit.REQUESTS, "total slow query");
         DORIS_METRIC_REGISTER.addMetrics(COUNTER_QUERY_SLOW);
         COUNTER_QUERY_TABLE = new LongCounterMetric("query_table", MetricUnit.REQUESTS, "total query from table");

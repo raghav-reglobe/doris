@@ -17,6 +17,8 @@
 
 package org.apache.doris.mysql;
 
+import org.apache.doris.common.Config;
+
 import java.util.EnumSet;
 
 // MySQL protocol capability
@@ -92,6 +94,48 @@ public class MysqlCapability {
 
     public static boolean isCompatible(MysqlCapability server, MysqlCapability client) {
         return true;
+    }
+
+    /**
+     * The capability this server advertises in its handshake and negotiates against: the default set,
+     * plus CLIENT_COMPRESS when the compressed protocol is offered by configuration. Evaluated once per
+     * connection, so the handshake and the negotiation see the same flags.
+     */
+    public static MysqlCapability serverCapability() {
+        int flags = DEFAULT_FLAGS;
+        if (compressionAdvertised()) {
+            flags |= Flag.CLIENT_COMPRESS.getFlagBit();
+        }
+        return new MysqlCapability(flags);
+    }
+
+    /**
+     * Whether the server offers the MySQL compressed protocol: zlib is listed in
+     * {@code mysql_compression_algorithms} and the MySQL channel is not SSL-wrapped (compression over the
+     * FE's own TLS channel is not implemented).
+     */
+    public static boolean compressionAdvertised() {
+        if (MysqlProto.SERVER_USE_SSL) {
+            return false;
+        }
+        String algorithms = Config.mysql_compression_algorithms;
+        if (algorithms == null) {
+            return false;
+        }
+        for (String algorithm : algorithms.split(",")) {
+            if ("zlib".equalsIgnoreCase(algorithm.trim())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public MysqlCapability withSsl() {
+        return new MysqlCapability(flags | Flag.CLIENT_SSL.getFlagBit());
+    }
+
+    public boolean isCompress() {
+        return (flags & Flag.CLIENT_COMPRESS.getFlagBit()) != 0;
     }
 
     public int getFlags() {

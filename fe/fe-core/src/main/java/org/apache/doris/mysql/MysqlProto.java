@@ -105,7 +105,8 @@ public class MysqlProto {
 
         // Server send handshake packet to client.
         serializer.reset();
-        MysqlHandshakePacket handshakePacket = new MysqlHandshakePacket(context.getConnectionId());
+        MysqlHandshakePacket handshakePacket = new MysqlHandshakePacket(context.getConnectionId(),
+                context.getServerCapability());
         handshakePacket.writeTo(serializer);
         context.setMysqlHandshakePacket(handshakePacket);
         try {
@@ -226,6 +227,11 @@ public class MysqlProto {
             return false;
         }
         context.setConnectAttributes(authPacket.getConnectAttributes());
+        if (context.getCapability().isCompress()) {
+            // Both sides agreed on CLIENT_COMPRESS: the response to this handshake still travels plain,
+            // every packet after it is a compressed one (MySQL protocol, Compression).
+            channel.armCompressionAfterNextFlush(Config.mysql_zlib_compression_level);
+        }
 
         // try to change catalog, if default_init_catalog inside user property is not 'internal'
         try {
