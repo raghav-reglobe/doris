@@ -542,8 +542,11 @@ public class MysqlChannelCompressionTest {
         byte[] p1 = "abc".getBytes(StandardCharsets.UTF_8);
         byte[] p2 = textPayload(300);
         byte[] frames = concat(frame(0, packet(0, p1), false), frame(1, packet(1, p2), true));
-        // an empty record between two cuts carries nothing and costs nothing
-        byte[] wire = FakeTlsChannel.records(frames, 3, 0, 9);
+        // frame 0 is 14 bytes (7-byte frame header + a 7-byte packet): cut it into records of 3, an empty
+        // one, and 11, so frame 1 is the last record on its own; the empty record carries nothing and
+        // costs nothing
+        Assertions.assertEquals(14, HEADER + 4 + p1.length);
+        byte[] wire = FakeTlsChannel.records(frames, 3, 0, 11);
         Harness harness = new Harness(wire, true);
         harness.negotiateAndStart();
         harness.channel.setSequenceId(0);
@@ -551,7 +554,8 @@ public class MysqlChannelCompressionTest {
         Assertions.assertArrayEquals(p2, remaining(harness.channel.fetchOnePacket()));
         Assertions.assertNull(harness.channel.fetchOnePacket());
 
-        // the peer goes away inside the last record: the packet it carried is never produced
+        // the peer goes away inside the last record: the packet it carried is never produced, while
+        // frame 0, complete in the earlier records, still is
         byte[] truncated = Arrays.copyOf(wire, wire.length - 5);
         harness = new Harness(truncated, true);
         harness.negotiateAndStart();
