@@ -344,12 +344,14 @@ public class MysqlChannel implements BytesChannel {
 
     // Close channel
     public void close() {
-        releaseCompression();
+        // the socket first, so a KILL from another thread takes effect at once; the compressor and the
+        // inflater are ended behind it, after any frame in flight has finished with them
         try {
             conn.close();
         } catch (IOException e) {
             LOG.warn("Close channel exception, ignore.");
         }
+        releaseCompression();
     }
 
     // all packet header is not encrypted, packet body is not sure.
@@ -508,9 +510,8 @@ public class MysqlChannel implements BytesChannel {
                 return got < 0 ? -1 : copied;
             }
             decryptData(tlsRecordBuffer, false);
-            if (remainingBuffer.capacity() < tlsRecordBuffer.remaining()) {
-                remainingBuffer = ByteBuffer.allocate(tlsRecordBuffer.remaining());
-            }
+            // a record carries at most 2^14 bytes of plaintext (RFC 8446 section 5.1), which the 16 KiB
+            // remainingBuffer holds; an empty record simply leaves it empty and the loop reads the next
             remainingBuffer.clear();
             remainingBuffer.put(tlsRecordBuffer);
             remainingBuffer.flip();
@@ -800,6 +801,11 @@ public class MysqlChannel implements BytesChannel {
             plain = new byte[chunkLen];
             plainOffset = 0;
             src.duplicate().get(plain);
+        }
+        // an outsized deflate buffer kept from a large frame is let go on the next normal-sized frame,
+        // whether or not that frame is worth deflating
+        if (deflateBuffer != null && deflateBuffer.length > SCRATCH_RETAIN_BYTES && chunkLen <= SCRATCH_RETAIN_BYTES) {
+            deflateBuffer = null;
         }
         int compressedLen = chunkLen >= MIN_COMPRESS_LENGTH ? deflate(plain, plainOffset, chunkLen) : -1;
         int payloadLen = compressedLen < 0 ? chunkLen : compressedLen;

@@ -538,6 +538,29 @@ public class MysqlChannelCompressionTest {
     }
 
     @Test
+    public void testTlsRecordsMayBeEmptyAndTheStreamMayEndMidRecord() throws Exception {
+        byte[] p1 = "abc".getBytes(StandardCharsets.UTF_8);
+        byte[] p2 = textPayload(300);
+        byte[] frames = concat(frame(0, packet(0, p1), false), frame(1, packet(1, p2), true));
+        // an empty record between two cuts carries nothing and costs nothing
+        byte[] wire = FakeTlsChannel.records(frames, 3, 0, 9);
+        Harness harness = new Harness(wire, true);
+        harness.negotiateAndStart();
+        harness.channel.setSequenceId(0);
+        Assertions.assertArrayEquals(p1, remaining(harness.channel.fetchOnePacket()));
+        Assertions.assertArrayEquals(p2, remaining(harness.channel.fetchOnePacket()));
+        Assertions.assertNull(harness.channel.fetchOnePacket());
+
+        // the peer goes away inside the last record: the packet it carried is never produced
+        byte[] truncated = Arrays.copyOf(wire, wire.length - 5);
+        harness = new Harness(truncated, true);
+        harness.negotiateAndStart();
+        harness.channel.setSequenceId(0);
+        Assertions.assertArrayEquals(p1, remaining(harness.channel.fetchOnePacket()));
+        Assertions.assertNull(harness.channel.fetchOnePacket());
+    }
+
+    @Test
     public void testCompressedFramesAreWrittenInsideTlsRecords() throws Exception {
         List<byte[]> bulk = new ArrayList<>();
         bulk.add(textPayload(200 * 1024));
