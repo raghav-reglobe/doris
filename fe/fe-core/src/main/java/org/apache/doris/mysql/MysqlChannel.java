@@ -727,10 +727,12 @@ public class MysqlChannel implements BytesChannel {
         isSend = true;
     }
 
-    // Wraps the outgoing bytes in compressed frames. Each frame carries up to MAX_PHYSICAL_PACKET_LENGTH
-    // bytes of the plain stream (several packets, or part of one); a frame too short to be worth it, or
-    // one that zlib cannot shrink, travels raw with uncompressed length 0. Compression precedes
-    // encryption, as the protocol layers them.
+    // Wraps the outgoing bytes in compressed frames: a flush hands the send buffer (many small packets),
+    // the direct path of writeBuffer hands one physical packet of at most MAX_PHYSICAL_PACKET_LENGTH
+    // bytes, so each call produces one frame and the loop is the guard that keeps a frame within its
+    // 3-byte lengths whatever a future caller hands in. A frame too short to be worth it, or one zlib
+    // cannot shrink, travels raw with uncompressed length 0. Compression precedes encryption, as the
+    // protocol layers them.
     private void sendCompressed(ByteBuffer buffer) throws IOException {
         while (buffer.hasRemaining()) {
             int chunkLen = Math.min(buffer.remaining(), MAX_PHYSICAL_PACKET_LENGTH);

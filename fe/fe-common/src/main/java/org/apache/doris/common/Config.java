@@ -446,19 +446,50 @@ public class Config extends ConfigBase {
     @ConfField(description = "Whether to enable TCP Keep-Alive for MySQL connections, disabled by default")
     public static boolean mysql_nio_enable_keep_alive = false;
 
-    @ConfField(mutable = true, masterOnly = false, description = "Compression algorithms the MySQL server "
-            + "advertises in its handshake, comma separated. Empty means the compressed protocol is not offered. "
-            + "Only zlib is supported. Not offered while the FE's MySQL port is TLS-wrapped (enable_ssl, or enable_tls "
-            + "with MySQL in scope): compression over the FE's own TLS channel is not implemented. A client that asks "
-            + "for it (mysql --compress, Connector/J "
+    @ConfField(mutable = true, masterOnly = false, callback = MysqlCompressionAlgorithmsConfHandler.class,
+            description = "Compression algorithms the MySQL server advertises in its handshake, comma separated. "
+            + "Empty means the compressed protocol is not offered. Only zlib is supported. Not offered while the "
+            + "FE's MySQL port is TLS-wrapped (enable_ssl, or enable_tls with MySQL in scope): compression over the "
+            + "FE's own TLS channel is not implemented. A client that asks for it (mysql --compress, Connector/J "
             + "useCompression=true) exchanges zlib-compressed packets from the first packet after authentication; "
-            + "every other client is unaffected.")
+            + "every other client is unaffected. A change applies to new connections only: a session that already "
+            + "negotiated keeps its protocol.")
     public static String mysql_compression_algorithms = "";
 
-    @ConfField(mutable = true, masterOnly = false, description = "The zlib level (1-9) used for the compressed "
-            + "MySQL packets sent to the client. 1 is the fastest; on text result sets it already shrinks the wire "
-            + "3-4x, while level 6 costs about 2.5x the CPU for a slightly better ratio.")
+    /** Accepts an empty list or a comma-separated list naming only algorithms the FE can speak (zlib). */
+    public static class MysqlCompressionAlgorithmsConfHandler implements ConfHandler {
+        @Override
+        public void handle(Field field, String value) throws Exception {
+            String trimmed = value == null ? "" : value.trim();
+            if (!trimmed.isEmpty()) {
+                for (String algorithm : trimmed.split(",")) {
+                    if (!"zlib".equalsIgnoreCase(algorithm.trim())) {
+                        throw new ConfigException(field.getName() + " accepts only zlib, or an empty list; got '"
+                                + algorithm.trim() + "'");
+                    }
+                }
+            }
+            field.set(null, trimmed);
+        }
+    }
+
+    @ConfField(mutable = true, masterOnly = false, callback = MysqlZlibCompressionLevelConfHandler.class,
+            description = "The zlib level (1-9) used for the compressed MySQL packets sent to the client. 1 is the "
+            + "fastest; on text result sets it already shrinks the wire 3-4x, while level 6 costs about 2.5x the CPU "
+            + "for a slightly better ratio. A change applies to new connections only.")
     public static int mysql_zlib_compression_level = 1;
+
+    /** Rejects a zlib level outside 1-9. */
+    public static class MysqlZlibCompressionLevelConfHandler implements ConfHandler {
+        @Override
+        public void handle(Field field, String value) throws Exception {
+            int parsed = Integer.parseInt(value.trim());
+            if (parsed < 1 || parsed > 9) {
+                throw new ConfigException(field.getName() + " must be between 1 and 9");
+            }
+            field.setInt(null, parsed);
+        }
+    }
 
     @ConfField(description = "The connection timeout of thrift client, in milliseconds. 0 means no timeout.")
     public static int thrift_client_timeout_ms = 0;

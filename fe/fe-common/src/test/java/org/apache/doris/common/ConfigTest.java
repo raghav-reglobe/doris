@@ -100,6 +100,34 @@ public class ConfigTest {
         Assertions.assertEquals(0, Config.mysql_compat_var_whitelist.length, "array length should be 0");
     }
 
+    // The MySQL compressed-protocol configs validate at runtime: only zlib (or nothing) can be offered,
+    // and the zlib level stays within 1-9.
+    @Test
+    public void testMysqlCompressionConfigsAreValidated() throws ConfigException {
+        String savedAlgorithms = Config.mysql_compression_algorithms;
+        int savedLevel = Config.mysql_zlib_compression_level;
+        try {
+            ConfigBase.setMutableConfig("mysql_compression_algorithms", " zlib ");
+            Assertions.assertEquals("zlib", Config.mysql_compression_algorithms);
+            ConfigBase.setMutableConfig("mysql_compression_algorithms", "");
+            Assertions.assertEquals("", Config.mysql_compression_algorithms);
+            Assertions.assertThrows(ConfigException.class,
+                    () -> ConfigBase.setMutableConfig("mysql_compression_algorithms", "zlib,zstd"));
+            Assertions.assertEquals("", Config.mysql_compression_algorithms, "a refused value leaves the old one");
+
+            ConfigBase.setMutableConfig("mysql_zlib_compression_level", "6");
+            Assertions.assertEquals(6, Config.mysql_zlib_compression_level);
+            Assertions.assertThrows(ConfigException.class,
+                    () -> ConfigBase.setMutableConfig("mysql_zlib_compression_level", "0"));
+            Assertions.assertThrows(ConfigException.class,
+                    () -> ConfigBase.setMutableConfig("mysql_zlib_compression_level", "10"));
+            Assertions.assertEquals(6, Config.mysql_zlib_compression_level);
+        } finally {
+            Config.mysql_compression_algorithms = savedAlgorithms;
+            Config.mysql_zlib_compression_level = savedLevel;
+        }
+    }
+
     @Test
     public void testConfFieldDescriptionsAreEnglishStrings() throws Exception {
         for (Field field : Config.class.getFields()) {
