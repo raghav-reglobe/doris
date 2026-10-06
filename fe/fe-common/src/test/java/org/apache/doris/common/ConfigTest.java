@@ -114,6 +114,22 @@ public class ConfigTest {
             Assertions.assertThrows(ConfigException.class,
                     () -> ConfigBase.setMutableConfig("mysql_compression_algorithms", "zlib,zstd"));
             Assertions.assertEquals("", Config.mysql_compression_algorithms, "a refused value leaves the old one");
+            // the stored form is canonical: trimmed, lower-cased, empty entries dropped
+            ConfigBase.setMutableConfig("mysql_compression_algorithms", ",ZLIB, ");
+            Assertions.assertEquals("zlib", Config.mysql_compression_algorithms);
+            ConfigBase.setMutableConfig("mysql_compression_algorithms", "zlib,");
+            Assertions.assertEquals("zlib", Config.mysql_compression_algorithms);
+            // the boot-time check applies the same rules to what fe.conf loaded
+            Config.mysql_compression_algorithms = " Zlib ";
+            Config.validateMysqlCompressionConfig();
+            Assertions.assertEquals("zlib", Config.mysql_compression_algorithms);
+            Config.mysql_compression_algorithms = "zlib,zstd";
+            Assertions.assertThrows(ConfigException.class, Config::validateMysqlCompressionConfig);
+            Config.mysql_compression_algorithms = "";
+            Config.mysql_zlib_compression_level = 0;
+            Assertions.assertThrows(ConfigException.class, Config::validateMysqlCompressionConfig);
+            Config.mysql_zlib_compression_level = 1;
+            Config.validateMysqlCompressionConfig();
 
             ConfigBase.setMutableConfig("mysql_zlib_compression_level", "6");
             Assertions.assertEquals(6, Config.mysql_zlib_compression_level);

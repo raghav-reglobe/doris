@@ -67,8 +67,6 @@ public class MysqlCapabilityCompressionTest {
     public void testUnsupportedAlgorithmsAdvertiseNothing() {
         Config.mysql_compression_algorithms = "zstd";
         Assertions.assertFalse(MysqlCapability.serverCapability().isCompress());
-        Config.mysql_compression_algorithms = null;
-        Assertions.assertFalse(MysqlCapability.serverCapability().isCompress());
     }
 
     @Test

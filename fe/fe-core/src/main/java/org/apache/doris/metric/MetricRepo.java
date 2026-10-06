@@ -556,7 +556,7 @@ public final class MetricRepo {
         COUNTER_SECONDARY_PASSWORD_AUTH = new LongCounterMetric("secondary_password_auth_total",
                 MetricUnit.REQUESTS, "total authentications with a retained secondary password");
         DORIS_METRIC_REGISTER.addMetrics(COUNTER_SECONDARY_PASSWORD_AUTH);
-        COUNTER_MYSQL_COMPRESSED_CONNECTIONS = new LongCounterMetric("mysql_compressed_connections_total",
+        COUNTER_MYSQL_COMPRESSED_CONNECTIONS = new LongCounterMetric("mysql_compressed_connection_total",
                 MetricUnit.CONNECTIONS, "MySQL connections that negotiated the compressed protocol");
         DORIS_METRIC_REGISTER.addMetrics(COUNTER_MYSQL_COMPRESSED_CONNECTIONS);
         COUNTER_MYSQL_COMPRESSED_SEND_RAW_BYTES = new LongCounterMetric("mysql_compressed_send_raw_bytes",

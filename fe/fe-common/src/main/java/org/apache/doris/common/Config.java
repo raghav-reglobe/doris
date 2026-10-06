@@ -19,6 +19,7 @@ package org.apache.doris.common;
 
 import java.io.File;
 import java.lang.reflect.Field;
+import java.util.Locale;
 
 public class Config extends ConfigBase {
     @ConfField(description = "The path of the user-defined configuration file, used to store fe_custom.conf. "
@@ -456,20 +457,43 @@ public class Config extends ConfigBase {
             + "negotiated keeps its protocol.")
     public static String mysql_compression_algorithms = "";
 
-    /** Accepts an empty list or a comma-separated list naming only algorithms the FE can speak (zlib). */
+    /** Stores the canonical form of the list; an algorithm the FE cannot speak is refused. */
     public static class MysqlCompressionAlgorithmsConfHandler implements ConfHandler {
         @Override
         public void handle(Field field, String value) throws Exception {
-            String trimmed = value == null ? "" : value.trim();
-            if (!trimmed.isEmpty()) {
-                for (String algorithm : trimmed.split(",")) {
-                    if (!"zlib".equalsIgnoreCase(algorithm.trim())) {
-                        throw new ConfigException(field.getName() + " accepts only zlib, or an empty list; got '"
-                                + algorithm.trim() + "'");
-                    }
-                }
+            field.set(null, normalizeMysqlCompressionAlgorithms(value));
+        }
+    }
+
+    /**
+     * The canonical form of a compression list: names trimmed and lower-cased, empty entries dropped,
+     * duplicates folded, joined with commas. An algorithm the FE cannot speak is refused, so a list is
+     * either empty or names only what the handshake can honour.
+     */
+    public static String normalizeMysqlCompressionAlgorithms(String value) throws ConfigException {
+        StringBuilder kept = new StringBuilder();
+        for (String algorithm : value.split(",")) {
+            String name = algorithm.trim().toLowerCase(Locale.ROOT);
+            if (name.isEmpty()) {
+                continue;
             }
-            field.set(null, trimmed);
+            if (!"zlib".equals(name)) {
+                throw new ConfigException("mysql_compression_algorithms accepts only zlib, or an empty list; got '"
+                        + algorithm.trim() + "'");
+            }
+            if (kept.indexOf(name) < 0) {
+                kept.append(kept.length() == 0 ? "" : ",").append(name);
+            }
+        }
+        return kept.toString();
+    }
+
+    /** Boot-time check of the two compressed-protocol configs, the rules ADMIN SET applies at runtime. */
+    public static void validateMysqlCompressionConfig() throws ConfigException {
+        mysql_compression_algorithms = normalizeMysqlCompressionAlgorithms(mysql_compression_algorithms);
+        if (mysql_zlib_compression_level < 1 || mysql_zlib_compression_level > 9) {
+            throw new ConfigException("mysql_zlib_compression_level must be between 1 and 9, got "
+                    + mysql_zlib_compression_level);
         }
     }
 

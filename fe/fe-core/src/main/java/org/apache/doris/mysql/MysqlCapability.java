@@ -115,11 +115,7 @@ public class MysqlCapability {
      * session over TLS compresses first and encrypts second, as the protocol layers them.
      */
     public static boolean compressionAdvertised() {
-        String algorithms = Config.mysql_compression_algorithms;
-        if (algorithms == null) {
-            return false;
-        }
-        for (String algorithm : algorithms.split(",")) {
+        for (String algorithm : Config.mysql_compression_algorithms.split(",")) {
             if ("zlib".equalsIgnoreCase(algorithm.trim())) {
                 return true;
             }
