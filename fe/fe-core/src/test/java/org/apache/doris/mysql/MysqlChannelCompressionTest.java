@@ -510,9 +510,11 @@ public class MysqlChannelCompressionTest {
 
     @Test
     public void testCompressedFramesAreReadOutOfTlsRecords() throws Exception {
-        // the same three packets over three frames as the plain reassembly test, but the frame stream
-        // arrives cut into TLS records at awkward places: inside a frame header, inside a payload, and
-        // one record holding the tail of one frame plus two whole frames
+        // the same three packets over three frames as the plain reassembly test (frame 0 raw, 19 bytes;
+        // frame 1 deflated, a few hundred bytes; frame 2 raw, 17 bytes), but the frame stream arrives cut
+        // into TLS records at awkward places: inside frame 0's header (3), inside its payload (9 more),
+        // one record holding the tail of frame 0, the whole of frame 1 and most of frame 2, and the last
+        // 7 bytes of frame 2 as the final record
         byte[] p1 = "abc".getBytes(StandardCharsets.UTF_8);
         byte[] p2 = textPayload(100 * 1024);
         byte[] p3 = textPayload(60);
@@ -523,7 +525,8 @@ public class MysqlChannelCompressionTest {
                 frame(0, Arrays.copyOfRange(stream, 0, cut1), false),
                 frame(1, Arrays.copyOfRange(stream, cut1, cut2), true),
                 frame(2, Arrays.copyOfRange(stream, cut2, stream.length), false));
-        byte[] wire = FakeTlsChannel.records(frames, 3, 9, 1000, 7);
+        Assertions.assertTrue(frames.length > 12 + 7 + HEADER, "the fixture must span more than its cuts");
+        byte[] wire = FakeTlsChannel.records(frames, 3, 9, frames.length - 12 - 7);
 
         Harness harness = new Harness(wire, true);
         harness.negotiateAndStart();
