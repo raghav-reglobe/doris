@@ -35,7 +35,6 @@ import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
-import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.DataFormatException;
 import java.util.zip.Deflater;
@@ -97,24 +96,43 @@ public class MysqlChannel implements BytesChannel {
     // mysql flag CLIENT_MULTI_STATEMENTS
     private boolean clientMultiStatements;
 
-    // MySQL compressed protocol (CLIENT_COMPRESS). Armed once both sides agreed on the flag; active from
-    // the first byte after the authentication phase's response has reached the wire. Every frame is
-    // zlib-compressed on its own: 3-byte compressed length, 1-byte compressed sequence id, 3-byte
-    // uncompressed length (0 = the payload travelled raw), then the payload, which may hold several
-    // packets or part of one. Compression sits below the packet layer and above TLS.
+    // MySQL compressed protocol (CLIENT_COMPRESS). Negotiated during the handshake, started right after the
+    // response that closes the authentication phase has been flushed: that response still travels plain,
+    // every packet after it is carried in compressed frames. A frame is zlib-compressed on its own: 3-byte
+    // compressed length, 1-byte compressed sequence id, 3-byte uncompressed length (0 = the payload
+    // travelled raw), then the payload, which may hold several packets or part of one. Compression sits
+    // below the packet layer and above TLS.
+    //
+    // Counting follows mysqld (net_serv.cc): while compressed, frames are what is counted. The frame
+    // counter advances with every frame sent or received; the packet counter follows it at every turn
+    // (after each inbound frame, as pkt_nr++ per frame header and pkt_nr = compress_pkt_nr after a flush
+    // do there), and the inner sequence id of an inbound packet is not verified, since a client numbers
+    // them from its own frame count. A reply's packets are numbered monotonically from the frame count,
+    // which is what libmysqlclient, Connector/J and go-sql-driver each expect.
     protected static final int COMPRESSED_HEADER_LEN = 7;
     // the MySQL server's threshold: a frame shorter than this is sent raw rather than compressed
     protected static final int MIN_COMPRESS_LENGTH = 50;
-    private boolean compressionArmed;
-    private boolean compressionActive;
-    private int compressionLevel;
-    // the compressed packet sequence id: a second counter beside sequenceId, reset with it at every
-    // command boundary and advanced by every compressed frame received or sent
+    // scratch buffers larger than this after an outsized frame are dropped, so an idle connection keeps
+    // at most the size of its send buffer per buffer
+    private static final int SCRATCH_RETAIN_BYTES = 2 * 1024 * 1024;
+    // the zlib level negotiated for this connection, or -1 while the client did not ask for compression
+    private int negotiatedCompressionLevel = -1;
+    private volatile boolean compressionActive;
+    // guards the compressor and the inflater against a close() from another thread (KILL, idle reaper)
+    private final Object compressionLock = new Object();
+    // the compressed packet sequence id: the frame counter, reset with sequenceId at every command
+    // boundary and advanced by every compressed frame received or sent
     private int compressedSequenceId;
     private Deflater deflater;
     private Inflater inflater;
+    // per-connection scratch, reused frame after frame: the deflate output, the outgoing frame, the
+    // inbound frame and its plain bytes
     private byte[] deflateBuffer;
-    // decompressed bytes received and not yet consumed by the packet reader
+    private ByteBuffer frameBuffer;
+    private byte[] inboundCompressed;
+    private byte[] inboundPlain;
+    // decompressed bytes received and not yet consumed by the packet reader: a view over inboundPlain,
+    // or over inboundCompressed for a frame that travelled raw
     private ByteBuffer inflated;
     private ByteBuffer compressedHeaderBuffer;
 
@@ -181,40 +199,77 @@ public class MysqlChannel implements BytesChannel {
     }
 
     /**
-     * Switches the channel to the compressed protocol once the next flush has reached the wire: the
-     * response that closes the authentication phase still travels plain, every packet after it is
-     * carried in compressed frames. Only meaningful before that response is written.
+     * Records that both sides agreed on CLIENT_COMPRESS during the handshake. Nothing changes on the wire
+     * until {@link #startCompressionIfNegotiated()} is called, right after the response that closes the
+     * authentication phase has been flushed: that response still travels plain, every packet after it is
+     * carried in compressed frames (MySQL protocol, Compression).
      */
-    public void armCompressionAfterNextFlush(int zlibLevel) {
+    public void setCompressionNegotiated(int zlibLevel) {
         Preconditions.checkState(!isSslMode, "compressed protocol is not supported on an SSL channel");
-        this.compressionLevel = Math.max(Deflater.BEST_SPEED, Math.min(Deflater.BEST_COMPRESSION, zlibLevel));
-        this.compressionArmed = true;
+        this.negotiatedCompressionLevel = Math.max(Deflater.BEST_SPEED,
+                Math.min(Deflater.BEST_COMPRESSION, zlibLevel));
+    }
+
+    /**
+     * Switches to the compressed protocol if it was negotiated. Called once the OK that closes the
+     * authentication phase is on the wire; a login refused after the handshake never gets here, so a
+     * connection torn down at once is neither switched nor counted.
+     */
+    public void startCompressionIfNegotiated() {
+        if (negotiatedCompressionLevel < 0 || compressionActive) {
+            return;
+        }
+        synchronized (compressionLock) {
+            deflater = new Deflater(negotiatedCompressionLevel);
+            inflater = new Inflater();
+        }
+        compressedHeaderBuffer = ByteBuffer.allocate(COMPRESSED_HEADER_LEN);
+        compressionActive = true;
+        if (MetricRepo.isInit) {
+            MetricRepo.COUNTER_MYSQL_COMPRESSED_CONNECTIONS.increase(1L);
+        }
     }
 
     public boolean isCompressionActive() {
         return compressionActive;
     }
 
-    private void activateCompression() {
-        compressionActive = true;
-        deflater = new Deflater(compressionLevel);
-        inflater = new Inflater();
-        deflateBuffer = new byte[64 * 1024];
-        compressedHeaderBuffer = ByteBuffer.allocate(COMPRESSED_HEADER_LEN);
-        if (MetricRepo.isInit) {
-            MetricRepo.COUNTER_MYSQL_COMPRESSED_CONNECTIONS.increase(1L);
+    // Ends the native compressor and inflater. Safe from another thread: a frame in flight finishes
+    // under the lock first, and the owner's next frame then fails as a closed channel.
+    private void releaseCompression() {
+        synchronized (compressionLock) {
+            if (deflater != null) {
+                deflater.end();
+                deflater = null;
+            }
+            if (inflater != null) {
+                inflater.end();
+                inflater = null;
+            }
         }
     }
 
-    private void releaseCompression() {
-        if (deflater != null) {
-            deflater.end();
-            deflater = null;
+    // Returns a scratch array of at least len bytes, reusing the current one when it fits and dropping
+    // an outsized one (kept from a large frame) once a normal-sized frame comes through again.
+    private static byte[] scratch(byte[] buf, int len) {
+        if (buf != null && buf.length > SCRATCH_RETAIN_BYTES && len <= SCRATCH_RETAIN_BYTES) {
+            buf = null;
         }
-        if (inflater != null) {
-            inflater.end();
-            inflater = null;
+        if (buf == null || buf.length < len) {
+            buf = new byte[Math.max(len, 64 * 1024)];
         }
+        return buf;
+    }
+
+    private static ByteBuffer scratchBuffer(ByteBuffer buf, int len) {
+        if (buf != null && buf.capacity() > SCRATCH_RETAIN_BYTES && len <= SCRATCH_RETAIN_BYTES) {
+            buf = null;
+        }
+        if (buf == null || buf.capacity() < len) {
+            buf = ByteBuffer.allocate(Math.max(len, 64 * 1024));
+        }
+        buf.clear();
+        return buf;
     }
 
     private void accCompressedSequenceId() {
@@ -306,24 +361,11 @@ public class MysqlChannel implements BytesChannel {
         if (compressionActive) {
             return readAllInflated(dstBuf);
         }
-        try {
-            while (dstBuf.remaining() != 0) {
-                int ret = Channels.readBlocking(conn.getSourceChannel(), dstBuf, context.getNetReadTimeout(),
-                        TimeUnit.SECONDS);
-                // return -1 when remote peer close the channel
-                if (ret == -1) {
-                    decryptData(dstBuf, isHeader);
-                    return readLen;
-                }
-                readLen += ret;
-            }
-            decryptData(dstBuf, isHeader);
-        } catch (IOException e) {
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("Read channel exception, ignore.", e);
-            }
+        readLen = readRaw(dstBuf);
+        if (readLen < 0) {
             return 0;
         }
+        decryptData(dstBuf, isHeader);
         return readLen;
     }
 
@@ -363,53 +405,68 @@ public class MysqlChannel implements BytesChannel {
             throw new IOException("Bad compressed packet sequence.");
         }
         accCompressedSequenceId();
-        ByteBuffer payload = ByteBuffer.allocate(compressedLen);
+        // the packet counter follows the frame counter at every turn (mysqld: pkt_nr++ per frame header),
+        // so the first packet of our reply is numbered from the frames we read
+        sequenceId = compressedSequenceId;
+        wireSequenceId = sequenceId;
+        inboundCompressed = scratch(inboundCompressed, compressedLen);
+        ByteBuffer payload = ByteBuffer.wrap(inboundCompressed, 0, compressedLen);
         if (readRaw(payload) != compressedLen) {
             return false;
         }
         payload.flip();
-        inflated = uncompressedLen == 0 ? payload : inflate(payload, uncompressedLen);
+        if (uncompressedLen == 0) {
+            inflated = payload;
+        } else {
+            inboundPlain = scratch(inboundPlain, uncompressedLen);
+            inflate(payload, inboundPlain, uncompressedLen);
+            inflated = ByteBuffer.wrap(inboundPlain, 0, uncompressedLen);
+        }
         if (MetricRepo.isInit) {
             MetricRepo.COUNTER_MYSQL_COMPRESSED_RECV_BYTES.increase((long) COMPRESSED_HEADER_LEN + compressedLen);
         }
         return true;
     }
 
-    private ByteBuffer inflate(ByteBuffer payload, int uncompressedLen) throws IOException {
-        inflater.reset();
-        inflater.setInput(payload.array(), payload.position(), payload.remaining());
-        byte[] out = new byte[uncompressedLen];
-        int produced = 0;
-        try {
-            while (produced < uncompressedLen) {
-                int n = inflater.inflate(out, produced, uncompressedLen - produced);
-                if (n == 0 && (inflater.finished() || inflater.needsInput() || inflater.needsDictionary())) {
-                    break;
+    private void inflate(ByteBuffer payload, byte[] out, int uncompressedLen) throws IOException {
+        synchronized (compressionLock) {
+            if (inflater == null) {
+                throw new ConnectionException("Channel closed while reading a compressed packet.");
+            }
+            inflater.reset();
+            inflater.setInput(payload.array(), payload.position(), payload.remaining());
+            int produced = 0;
+            try {
+                while (produced < uncompressedLen) {
+                    int n = inflater.inflate(out, produced, uncompressedLen - produced);
+                    if (n == 0 && (inflater.finished() || inflater.needsInput() || inflater.needsDictionary())) {
+                        break;
+                    }
+                    produced += n;
                 }
-                produced += n;
+                // a stream that still has output past the declared length is corrupt
+                if (produced == uncompressedLen && !inflater.finished() && inflater.inflate(new byte[1]) != 0) {
+                    produced++;
+                }
+            } catch (DataFormatException e) {
+                throw new IOException("Corrupt compressed packet: " + e.getMessage(), e);
             }
-            // a stream that still has output past the declared length is corrupt
-            if (produced == uncompressedLen && !inflater.finished() && inflater.inflate(new byte[1]) != 0) {
-                produced++;
+            if (produced != uncompressedLen) {
+                throw new IOException("Compressed packet inflated to " + produced + " bytes, header declared "
+                        + uncompressedLen);
             }
-        } catch (DataFormatException e) {
-            throw new IOException("Corrupt compressed packet: " + e.getMessage(), e);
         }
-        if (produced != uncompressedLen) {
-            throw new IOException("Compressed packet inflated to " + produced + " bytes, header declared "
-                    + uncompressedLen);
-        }
-        return ByteBuffer.wrap(out);
     }
 
     // The plain socket read loop shared by the packet reader and the compressed-frame reader. Returns the
-    // bytes read: short when the peer closed the connection or the read failed.
+    // bytes read, short when the peer closed the connection, or -1 when the read failed.
     private int readRaw(ByteBuffer dstBuf) {
         int readLen = 0;
         try {
             while (dstBuf.remaining() != 0) {
                 int ret = Channels.readBlocking(conn.getSourceChannel(), dstBuf, context.getNetReadTimeout(),
                         TimeUnit.SECONDS);
+                // return -1 when remote peer close the channel
                 if (ret == -1) {
                     return readLen;
                 }
@@ -419,6 +476,7 @@ public class MysqlChannel implements BytesChannel {
             if (LOG.isDebugEnabled()) {
                 LOG.debug("Read channel exception, ignore.", e);
             }
+            return -1;
         }
         return readLen;
     }
@@ -524,7 +582,9 @@ public class MysqlChannel implements BytesChannel {
                     }
                     return null;
                 }
-                if (packetId() != sequenceId) {
+                // in compressed mode the counters follow the frames and the inner id is not verified
+                // (see readCompressedFrame), as mysqld does
+                if (!compressionActive && packetId() != sequenceId) {
                     LOG.warn("receive packet sequence id[" + packetId() + "] want to get[" + sequenceId + "]");
                     throw new IOException("Bad packet sequence.");
                 }
@@ -601,7 +661,7 @@ public class MysqlChannel implements BytesChannel {
                         + ") is not equal with length in head.(" + packetLen + ")");
                 return null;
             }
-            if (!isSslHandshaking) {
+            if (!isSslHandshaking && !compressionActive) {
                 accSequenceId();
                 wireSequenceId = sequenceId;
             }
@@ -638,11 +698,6 @@ public class MysqlChannel implements BytesChannel {
         } else {
             writeRaw(encryptData(buffer));
         }
-        if (compressionArmed) {
-            // the authentication phase's response is on the wire: everything after it is compressed
-            compressionArmed = false;
-            activateCompression();
-        }
     }
 
     private void writeRaw(ByteBuffer buffer) throws IOException {
@@ -671,7 +726,7 @@ public class MysqlChannel implements BytesChannel {
         }
     }
 
-    private ByteBuffer compressFrame(ByteBuffer src, int chunkLen) {
+    private ByteBuffer compressFrame(ByteBuffer src, int chunkLen) throws IOException {
         byte[] plain;
         int plainOffset;
         if (src.hasArray()) {
@@ -682,16 +737,11 @@ public class MysqlChannel implements BytesChannel {
             plainOffset = 0;
             src.duplicate().get(plain);
         }
-        int compressedLen = -1;
-        if (chunkLen >= MIN_COMPRESS_LENGTH) {
-            compressedLen = deflate(plain, plainOffset, chunkLen);
-            if (compressedLen >= chunkLen) {
-                compressedLen = -1;
-            }
-        }
+        int compressedLen = chunkLen >= MIN_COMPRESS_LENGTH ? deflate(plain, plainOffset, chunkLen) : -1;
         int payloadLen = compressedLen < 0 ? chunkLen : compressedLen;
         int declaredUncompressed = compressedLen < 0 ? 0 : chunkLen;
-        ByteBuffer frame = ByteBuffer.allocate(COMPRESSED_HEADER_LEN + payloadLen);
+        frameBuffer = scratchBuffer(frameBuffer, COMPRESSED_HEADER_LEN + payloadLen);
+        ByteBuffer frame = frameBuffer;
         frame.put((byte) payloadLen).put((byte) (payloadLen >> 8)).put((byte) (payloadLen >> 16));
         frame.put((byte) compressedSequenceId);
         frame.put((byte) declaredUncompressed).put((byte) (declaredUncompressed >> 8))
@@ -711,19 +761,26 @@ public class MysqlChannel implements BytesChannel {
         return frame;
     }
 
-    // zlib-compresses len bytes of in[off..] into deflateBuffer and returns the compressed length
-    private int deflate(byte[] in, int off, int len) {
-        deflater.reset();
-        deflater.setInput(in, off, len);
-        deflater.finish();
-        int produced = 0;
-        while (!deflater.finished()) {
-            if (produced == deflateBuffer.length) {
-                deflateBuffer = Arrays.copyOf(deflateBuffer, deflateBuffer.length * 2);
+    // zlib-compresses len bytes of in[off..] into deflateBuffer and returns the compressed length, or -1 as
+    // soon as the output reaches the input length (the frame then travels raw, no point finishing)
+    private int deflate(byte[] in, int off, int len) throws IOException {
+        synchronized (compressionLock) {
+            if (deflater == null) {
+                throw new ConnectionException("Channel closed while compressing a packet.");
             }
-            produced += deflater.deflate(deflateBuffer, produced, deflateBuffer.length - produced);
+            deflateBuffer = scratch(deflateBuffer, len);
+            deflater.reset();
+            deflater.setInput(in, off, len);
+            deflater.finish();
+            int produced = 0;
+            while (!deflater.finished()) {
+                if (produced >= len) {
+                    return -1;
+                }
+                produced += deflater.deflate(deflateBuffer, produced, len - produced);
+            }
+            return produced < len ? produced : -1;
         }
-        return produced;
     }
 
     protected ByteBuffer encryptData(ByteBuffer dstBuf) throws SSLException {

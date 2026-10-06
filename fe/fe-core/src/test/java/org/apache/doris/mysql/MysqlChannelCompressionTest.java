@@ -71,7 +71,7 @@ public class MysqlChannelCompressionTest {
             int n = 0;
             while (n < uncompressedLen) {
                 int got = inflater.inflate(out, n, uncompressedLen - n);
-                Assertions.assertTrue(got > 0 || !inflater.finished(), "stream ended before the declared length");
+                Assertions.assertTrue(got > 0, "stream ended before the declared length");
                 n += got;
             }
             Assertions.assertTrue(inflater.finished(), "stream longer than the declared length");
@@ -118,10 +118,15 @@ public class MysqlChannelCompressionTest {
             channel = new MysqlChannel(connection, ctx);
         }
 
-        /** Arms compression and flushes the one plain packet that stands for the authentication OK. */
-        void armAndActivate() throws IOException {
-            channel.armCompressionAfterNextFlush(1);
+        /**
+         * The handshake's outcome: compression negotiated, the one plain packet that stands for the
+         * authentication OK flushed, then the compressed protocol started, as AcceptListener does.
+         */
+        void negotiateAndStart() throws IOException {
+            channel.setCompressionNegotiated(1);
             channel.sendAndFlush(ByteBuffer.wrap(new byte[] {0}));
+            Assertions.assertFalse(channel.isCompressionActive(), "nothing is compressed before the OK is out");
+            channel.startCompressionIfNegotiated();
             Assertions.assertTrue(channel.isCompressionActive());
         }
 
@@ -198,7 +203,7 @@ public class MysqlChannelCompressionTest {
         byte[] expected = plain.wireBytes();
 
         Harness compressed = new Harness(new byte[0]);
-        compressed.armAndActivate();
+        compressed.negotiateAndStart();
         int authResponseLen = compressed.wireBytes().length;
         Assertions.assertEquals(4 + 1, authResponseLen, "the authentication response travels plain");
         compressed.channel.setSequenceId(0);
@@ -278,7 +283,7 @@ public class MysqlChannelCompressionTest {
                 frame(2, Arrays.copyOfRange(stream, cut2, stream.length), false));
 
         Harness harness = new Harness(wire);
-        harness.armAndActivate();
+        harness.negotiateAndStart();
         harness.channel.setSequenceId(0);
 
         ByteBuffer got = harness.channel.fetchOnePacket();
@@ -295,7 +300,7 @@ public class MysqlChannelCompressionTest {
     public void testReadRefusesAFrameOutOfSequence() throws Exception {
         byte[] wire = frame(1, packet(0, "abc".getBytes(StandardCharsets.UTF_8)), false);
         Harness harness = new Harness(wire);
-        harness.armAndActivate();
+        harness.negotiateAndStart();
         harness.channel.setSequenceId(0);
         IOException e = Assertions.assertThrows(IOException.class, harness.channel::fetchOnePacket);
         Assertions.assertTrue(e.getMessage().contains("compressed packet sequence"), e.getMessage());
@@ -309,7 +314,7 @@ public class MysqlChannelCompressionTest {
         good[4] = (byte) (plain.length - 1);
         good[5] = (byte) ((plain.length - 1) >> 8);
         Harness harness = new Harness(good);
-        harness.armAndActivate();
+        harness.negotiateAndStart();
         harness.channel.setSequenceId(0);
         IOException e = Assertions.assertThrows(IOException.class, harness.channel::fetchOnePacket);
         Assertions.assertTrue(e.getMessage().contains("header declared"), e.getMessage());
@@ -322,7 +327,7 @@ public class MysqlChannelCompressionTest {
         byte[] wire = concat(frame(0, packet(0, new byte[] {3, 'x'}), false),
                 frame(0, packet(0, new byte[] {3, 'y'}), false));
         Harness harness = new Harness(wire);
-        harness.armAndActivate();
+        harness.negotiateAndStart();
         harness.channel.setSequenceId(0);
         Assertions.assertArrayEquals(new byte[] {3, 'x'}, remaining(harness.channel.fetchOnePacket()));
         int before = harness.wireBytes().length;
@@ -332,6 +337,50 @@ public class MysqlChannelCompressionTest {
         Assertions.assertEquals(1, response.get(0).seq, "the response continues the command's compressed sequence");
         harness.channel.setSequenceId(0);
         Assertions.assertArrayEquals(new byte[] {3, 'y'}, remaining(harness.channel.fetchOnePacket()));
+    }
+
+    @Test
+    public void testPacketCounterFollowsTheFramesAtEachTurn() throws Exception {
+        // a command whose single packet (seq 0) arrives split over two raw frames (seq 0 and 1), the way
+        // libmysqlclient sends a statement longer than its net buffer: mysqld numbers its reply from the
+        // frames it read (2), not from the packets (1), and so must we
+        byte[] command = packet(0, textPayload(120));
+        byte[] wire = concat(frame(0, Arrays.copyOfRange(command, 0, 70), false),
+                frame(1, Arrays.copyOfRange(command, 70, command.length), false));
+        Harness harness = new Harness(wire);
+        harness.negotiateAndStart();
+        harness.channel.setSequenceId(0);
+        Assertions.assertArrayEquals(textPayload(120), remaining(harness.channel.fetchOnePacket()));
+        int before = harness.wireBytes().length;
+        harness.channel.sendAndFlush(ByteBuffer.wrap(new byte[] {7}));
+        List<Frame> reply = decodeFrames(harness.wireBytes(), before);
+        Assertions.assertEquals(1, reply.size());
+        Assertions.assertEquals(2, reply.get(0).seq, "the reply's frame continues the frame count");
+        byte[] plain = reply.get(0).plain();
+        Assertions.assertEquals(2, plain[3] & 0xFF, "the reply's first packet is numbered from the frames read");
+    }
+
+    @Test
+    public void testInboundInnerSequenceIsNotVerifiedWhileCompressed() throws Exception {
+        // a client numbers inner packets from its own frame count; mysqld verifies only the frame sequence
+        byte[] payload = "abc".getBytes(StandardCharsets.UTF_8);
+        Harness harness = new Harness(frame(0, packet(9, payload), false));
+        harness.negotiateAndStart();
+        harness.channel.setSequenceId(0);
+        Assertions.assertArrayEquals(payload, remaining(harness.channel.fetchOnePacket()));
+    }
+
+    @Test
+    public void testRefusedLoginNeverStartsCompression() throws Exception {
+        Harness harness = new Harness(new byte[0]);
+        harness.channel.setCompressionNegotiated(1);
+        harness.channel.setSequenceId(0);
+        // the refusal that closes the handshake is flushed, but nothing starts the compressed protocol
+        byte[] refusal = new byte[] {(byte) 0xff, 1, 2};
+        harness.channel.sendAndFlush(ByteBuffer.wrap(refusal));
+        Assertions.assertFalse(harness.channel.isCompressionActive());
+        harness.channel.sendAndFlush(ByteBuffer.wrap(textPayload(300)));
+        Assertions.assertArrayEquals(concat(packet(0, refusal), packet(1, textPayload(300))), harness.wireBytes());
     }
 
     @Test

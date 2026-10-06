@@ -111,8 +111,8 @@ public class MysqlCapability {
 
     /**
      * Whether the server offers the MySQL compressed protocol: zlib is listed in
-     * {@code mysql_compression_algorithms} and the MySQL channel is not SSL-wrapped (compression over the
-     * FE's own TLS channel is not implemented).
+     * {@code mysql_compression_algorithms} and the FE's MySQL port is not TLS-wrapped ({@code enable_ssl},
+     * or {@code enable_tls} with MySQL in scope); compression over the FE's own TLS channel is not implemented.
      */
     public static boolean compressionAdvertised() {
         if (MysqlProto.SERVER_USE_SSL) {

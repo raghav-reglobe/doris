@@ -34,12 +34,9 @@ public class MysqlHandshakePacket extends MysqlPacket {
     private int connectionId;
     private byte[] authPluginData;
 
-    // the capability advertised to the client; SSL is added on top when the server offers it
+    // the capability advertised to the client, the connection's one (MysqlProtocolAdapter builds it once,
+    // so the handshake and the negotiation see the same flags); SSL is added on top when the server offers it
     private final MysqlCapability serverCapability;
-
-    public MysqlHandshakePacket(int connectionId) {
-        this(connectionId, MysqlCapability.serverCapability());
-    }
 
     public MysqlHandshakePacket(int connectionId, MysqlCapability serverCapability) {
         this.connectionId = connectionId;

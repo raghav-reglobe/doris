@@ -228,9 +228,10 @@ public class MysqlProto {
         }
         context.setConnectAttributes(authPacket.getConnectAttributes());
         if (context.getCapability().isCompress()) {
-            // Both sides agreed on CLIENT_COMPRESS: the response to this handshake still travels plain,
-            // every packet after it is a compressed one (MySQL protocol, Compression).
-            channel.armCompressionAfterNextFlush(Config.mysql_zlib_compression_level);
+            // Both sides agreed on CLIENT_COMPRESS. The response to this handshake still travels plain;
+            // the compressed protocol starts once that response is on the wire, and only for an accepted
+            // login (AcceptListener, right after the OK is sent).
+            channel.setCompressionNegotiated(Config.mysql_zlib_compression_level);
         }
 
         // try to change catalog, if default_init_catalog inside user property is not 'internal'
