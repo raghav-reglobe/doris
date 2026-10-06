@@ -137,6 +137,8 @@ public class MysqlChannel implements BytesChannel {
     // or over inboundCompressed for a frame that travelled raw
     private ByteBuffer inflated;
     private ByteBuffer compressedHeaderBuffer;
+    // one TLS record (header + body, then its plaintext) while compressed frames are read over TLS
+    private ByteBuffer tlsRecordBuffer;
 
     private ConnectContext context;
 
@@ -207,7 +209,6 @@ public class MysqlChannel implements BytesChannel {
      * carried in compressed frames (MySQL protocol, Compression).
      */
     public void setCompressionNegotiated(int zlibLevel) {
-        Preconditions.checkState(!isSslMode, "compressed protocol is not supported on an SSL channel");
         this.negotiatedCompressionLevel = Math.max(Deflater.BEST_SPEED,
                 Math.min(Deflater.BEST_COMPRESSION, zlibLevel));
     }
@@ -357,15 +358,16 @@ public class MysqlChannel implements BytesChannel {
         if (!dstBuf.hasRemaining()) {
             return 0;
         }
+        if (compressionActive) {
+            // frames come first: over TLS the leftover plaintext of a record belongs to the frame stream
+            return readAllInflated(dstBuf);
+        }
         if (remainingBuffer != null && remainingBuffer.hasRemaining()) {
             int oldLen = dstBuf.position();
             while (dstBuf.hasRemaining()) {
                 dstBuf.put(remainingBuffer.get());
             }
             return dstBuf.position() - oldLen;
-        }
-        if (compressionActive) {
-            return readAllInflated(dstBuf);
         }
         readLen = readRaw(dstBuf);
         if (readLen < 0) {
@@ -399,7 +401,7 @@ public class MysqlChannel implements BytesChannel {
     // frame arrived; a frame out of sequence or that does not inflate to its declared length is an error.
     private boolean readCompressedFrame() throws IOException {
         compressedHeaderBuffer.clear();
-        if (readRaw(compressedHeaderBuffer) != COMPRESSED_HEADER_LEN) {
+        if (readPlaintext(compressedHeaderBuffer) != COMPRESSED_HEADER_LEN) {
             return false;
         }
         byte[] h = compressedHeaderBuffer.array();
@@ -421,7 +423,7 @@ public class MysqlChannel implements BytesChannel {
         inboundCompressed = scratch(inboundCompressed, compressedLen);
         inboundPlain = scratch(inboundPlain, uncompressedLen);
         ByteBuffer payload = ByteBuffer.wrap(inboundCompressed, 0, compressedLen);
-        if (readRaw(payload) != compressedLen) {
+        if (readPlaintext(payload) != compressedLen) {
             return false;
         }
         payload.flip();
@@ -469,6 +471,51 @@ public class MysqlChannel implements BytesChannel {
                 throw new IOException("Compressed packet ends before its zlib trailer.");
             }
         }
+    }
+
+    // Fills dstBuf with the connection's plain application bytes: straight from the socket on a plain
+    // channel, out of TLS records on an SSL one, where a record may hold less than asked for or more (the
+    // surplus waits in remainingBuffer for the next call). Compression sits above TLS, so compressed
+    // frames are read through this. Returns the bytes copied, short when the peer closed the connection,
+    // or -1 when the read failed.
+    private int readPlaintext(ByteBuffer dstBuf) throws IOException {
+        if (!isSslMode) {
+            return readRaw(dstBuf);
+        }
+        int copied = 0;
+        while (dstBuf.hasRemaining()) {
+            if (remainingBuffer.hasRemaining()) {
+                int n = Math.min(dstBuf.remaining(), remainingBuffer.remaining());
+                int oldLimit = remainingBuffer.limit();
+                remainingBuffer.limit(remainingBuffer.position() + n);
+                dstBuf.put(remainingBuffer);
+                remainingBuffer.limit(oldLimit);
+                copied += n;
+                continue;
+            }
+            // one TLS record: the 5-byte header, then the body; decryptData turns the whole into plaintext
+            sslHeaderByteBuffer.clear();
+            int got = readRaw(sslHeaderByteBuffer);
+            if (got != SSL_PACKET_HEADER_LEN) {
+                return got < 0 ? -1 : copied;
+            }
+            int recordLen = packetLen(true);
+            tlsRecordBuffer = scratchBuffer(tlsRecordBuffer, SSL_PACKET_HEADER_LEN + recordLen);
+            tlsRecordBuffer.put(sslHeaderByteBuffer.array());
+            tlsRecordBuffer.limit(SSL_PACKET_HEADER_LEN + recordLen);
+            got = readRaw(tlsRecordBuffer);
+            if (got != recordLen) {
+                return got < 0 ? -1 : copied;
+            }
+            decryptData(tlsRecordBuffer, false);
+            if (remainingBuffer.capacity() < tlsRecordBuffer.remaining()) {
+                remainingBuffer = ByteBuffer.allocate(tlsRecordBuffer.remaining());
+            }
+            remainingBuffer.clear();
+            remainingBuffer.put(tlsRecordBuffer);
+            remainingBuffer.flip();
+        }
+        return copied;
     }
 
     // The plain socket read loop shared by the packet reader and the compressed-frame reader. Returns the
@@ -568,7 +615,9 @@ public class MysqlChannel implements BytesChannel {
         while (true) {
             int packetLen;
             // one SSL packet may include multiple Mysql packets, we use remainingBuffer to store them.
-            if ((isSslMode || isSslHandshaking) && !remainingBuffer.hasRemaining()) {
+            // a compressed session reads its packets out of frames (readAll), whether or not the frames
+            // travel inside TLS records; the record parsing below is the plain-TLS path only
+            if ((isSslMode || isSslHandshaking) && !compressionActive && !remainingBuffer.hasRemaining()) {
                 if (remainingBuffer.position() != 0) {
                     remainingBuffer.clear();
                     remainingBuffer.flip();
@@ -609,7 +658,7 @@ public class MysqlChannel implements BytesChannel {
             // before read, set limit to make read only one packet
             result.limit(result.position() + packetLen);
             readLen = readAll(result, false);
-            if (isSslMode && remainingBuffer.position() == 0 && result.hasRemaining()) {
+            if (isSslMode && !compressionActive && remainingBuffer.position() == 0 && result.hasRemaining()) {
                 int available = result.limit();
                 if (available < PACKET_HEADER_LEN) {
                     LOG.warn("SSL mode: invalid mysql packet header, available bytes: " + available);

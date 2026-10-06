@@ -448,10 +448,10 @@ public class Config extends ConfigBase {
 
     @ConfField(mutable = true, masterOnly = false, callback = MysqlCompressionAlgorithmsConfHandler.class,
             description = "Compression algorithms the MySQL server advertises in its handshake, comma separated. "
-            + "Empty means the compressed protocol is not offered. Only zlib is supported. Not offered while the "
-            + "FE's MySQL port is TLS-wrapped (enable_ssl, or enable_tls with MySQL in scope): compression over the "
-            + "FE's own TLS channel is not implemented. A client that asks for it (mysql --compress, Connector/J "
-            + "useCompression=true) exchanges zlib-compressed packets from the first packet after authentication; "
+            + "Empty means the compressed protocol is not offered. Only zlib is supported. Works with or without TLS "
+            + "on the MySQL port (compress first, encrypt second). A client that asks for it (mysql --compress, "
+            + "Connector/J useCompression=true) exchanges zlib-compressed packets from the first packet after "
+            + "authentication; "
             + "every other client is unaffected. A change applies to new connections only: a session that already "
             + "negotiated keeps its protocol.")
     public static String mysql_compression_algorithms = "";

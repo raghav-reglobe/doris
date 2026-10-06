@@ -87,6 +87,11 @@ public class MysqlChannelCompressionTest {
         final MysqlChannel channel;
 
         Harness(byte[] inputBytes) throws IOException {
+            this(inputBytes, false);
+        }
+
+        /** With {@code tls}, the channel is in SSL mode over an identity cipher: records are real, keys are not. */
+        Harness(byte[] inputBytes, boolean tls) throws IOException {
             input = ByteBuffer.wrap(inputBytes);
             StreamConnection connection = Mockito.mock(StreamConnection.class);
             Mockito.when(connection.getPeerAddress()).thenReturn(new java.net.InetSocketAddress("127.0.0.1", 3306));
@@ -115,7 +120,7 @@ public class MysqlChannelCompressionTest {
                 return len;
             });
             ConnectContext ctx = new ConnectContext(connection);
-            channel = new MysqlChannel(connection, ctx);
+            channel = tls ? new FakeTlsChannel(connection, ctx) : new MysqlChannel(connection, ctx);
         }
 
         /**
@@ -132,6 +137,85 @@ public class MysqlChannelCompressionTest {
 
         byte[] wireBytes() {
             return wire.toByteArray();
+        }
+    }
+
+    /**
+     * A channel in SSL mode whose cipher is the identity: TLS records keep their real 5-byte header
+     * (type, version, 2-byte length) and carry the plaintext as is. It exercises the record-versus-frame
+     * boundaries of the compressed protocol over TLS without a key store.
+     */
+    private static final class FakeTlsChannel extends MysqlChannel {
+        static final int RECORD_HEADER = 5;
+        static final int MAX_RECORD_PLAINTEXT = 16384;
+
+        FakeTlsChannel(StreamConnection connection, ConnectContext ctx) {
+            super(connection, ctx);
+            initSslBuffer();
+            setSslMode(true);
+        }
+
+        @Override
+        protected void decryptData(ByteBuffer dstBuf, boolean isHeader) {
+            if (isHeader) {
+                return;
+            }
+            // the record (header + body) is in dstBuf with the position at its end, like the real one
+            dstBuf.flip();
+            dstBuf.position(RECORD_HEADER);
+            dstBuf.compact();
+            dstBuf.flip();
+        }
+
+        @Override
+        protected ByteBuffer encryptData(ByteBuffer dstBuf) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            while (dstBuf.hasRemaining()) {
+                int n = Math.min(MAX_RECORD_PLAINTEXT, dstBuf.remaining());
+                byte[] body = new byte[n];
+                dstBuf.get(body);
+                out.write(record(body), 0, RECORD_HEADER + n);
+            }
+            return ByteBuffer.wrap(out.toByteArray());
+        }
+
+        static byte[] record(byte[] plaintext) {
+            ByteBuffer buffer = ByteBuffer.allocate(RECORD_HEADER + plaintext.length);
+            buffer.put((byte) 0x17).put((byte) 3).put((byte) 3);
+            buffer.put((byte) (plaintext.length >> 8)).put((byte) plaintext.length);
+            buffer.put(plaintext);
+            return buffer.array();
+        }
+
+        /** Cuts a plain byte stream into records of the given sizes; the remainder is one last record. */
+        static byte[] records(byte[] plain, int... sizes) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            int pos = 0;
+            for (int size : sizes) {
+                byte[] piece = Arrays.copyOfRange(plain, pos, pos + size);
+                out.write(record(piece), 0, RECORD_HEADER + piece.length);
+                pos += size;
+            }
+            while (pos < plain.length) {
+                byte[] piece = Arrays.copyOfRange(plain, pos, Math.min(plain.length, pos + MAX_RECORD_PLAINTEXT));
+                out.write(record(piece), 0, RECORD_HEADER + piece.length);
+                pos += piece.length;
+            }
+            return out.toByteArray();
+        }
+
+        /** The plaintext carried by a run of records. */
+        static byte[] unwrap(byte[] wire, int from) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            int pos = from;
+            while (pos < wire.length) {
+                Assertions.assertEquals(0x17, wire[pos] & 0xFF, "record type at " + pos);
+                int len = ((wire[pos + 3] & 0xFF) << 8) | (wire[pos + 4] & 0xFF);
+                out.write(wire, pos + RECORD_HEADER, len);
+                pos += RECORD_HEADER + len;
+            }
+            Assertions.assertEquals(wire.length, pos, "records end exactly at the wire's end");
+            return out.toByteArray();
         }
     }
 
@@ -422,6 +506,74 @@ public class MysqlChannelCompressionTest {
         IOException e = Assertions.assertThrows(IOException.class, harness.channel::fetchOnePacket);
         Assertions.assertTrue(e.getMessage().contains("trailer") || e.getMessage().contains("header declared"),
                 e.getMessage());
+    }
+
+    @Test
+    public void testCompressedFramesAreReadOutOfTlsRecords() throws Exception {
+        // the same three packets over three frames as the plain reassembly test, but the frame stream
+        // arrives cut into TLS records at awkward places: inside a frame header, inside a payload, and
+        // one record holding the tail of one frame plus two whole frames
+        byte[] p1 = "abc".getBytes(StandardCharsets.UTF_8);
+        byte[] p2 = textPayload(100 * 1024);
+        byte[] p3 = textPayload(60);
+        byte[] stream = concat(packet(0, p1), packet(1, p2), packet(2, p3));
+        int cut1 = 4 + p1.length + 5;
+        int cut2 = stream.length - 10;
+        byte[] frames = concat(
+                frame(0, Arrays.copyOfRange(stream, 0, cut1), false),
+                frame(1, Arrays.copyOfRange(stream, cut1, cut2), true),
+                frame(2, Arrays.copyOfRange(stream, cut2, stream.length), false));
+        byte[] wire = FakeTlsChannel.records(frames, 3, 9, 1000, 7);
+
+        Harness harness = new Harness(wire, true);
+        harness.negotiateAndStart();
+        harness.channel.setSequenceId(0);
+        Assertions.assertArrayEquals(p1, remaining(harness.channel.fetchOnePacket()));
+        Assertions.assertArrayEquals(p2, remaining(harness.channel.fetchOnePacket()));
+        Assertions.assertArrayEquals(p3, remaining(harness.channel.fetchOnePacket()));
+        Assertions.assertNull(harness.channel.fetchOnePacket());
+    }
+
+    @Test
+    public void testCompressedFramesAreWrittenInsideTlsRecords() throws Exception {
+        List<byte[]> bulk = new ArrayList<>();
+        bulk.add(textPayload(200 * 1024));
+        bulk.add(textPayload(MysqlChannel.MAX_PHYSICAL_PACKET_LENGTH + 1024 * 1024));
+
+        Harness plain = new Harness(new byte[0]);
+        plain.channel.setSequenceId(0);
+        sendPackets(plain.channel, bulk);
+        byte[] expected = plain.wireBytes();
+
+        Harness tls = new Harness(new byte[0], true);
+        tls.negotiateAndStart();
+        int handshakeLen = tls.wireBytes().length;
+        Assertions.assertEquals(FakeTlsChannel.RECORD_HEADER + 4 + 1, handshakeLen,
+                "the authentication response travels as one plain record");
+        tls.channel.setSequenceId(0);
+        sendPackets(tls.channel, bulk);
+
+        // records on the wire, frames inside the records, the plain packet stream inside the frames
+        byte[] framesOnTheWire = FakeTlsChannel.unwrap(tls.wireBytes(), handshakeLen);
+        List<Frame> frames = decodeFrames(framesOnTheWire, 0);
+        Assertions.assertArrayEquals(expected, plainStream(frames));
+        Assertions.assertTrue(frames.size() >= 3, "a packet past 16 MiB spans more than one frame");
+        for (int i = 0; i < frames.size(); i++) {
+            Assertions.assertEquals(i & 0xFF, frames.get(i).seq);
+        }
+    }
+
+    @Test
+    public void testPlainTlsSessionIsUntouched() throws Exception {
+        // no compression negotiated: the existing TLS packet path serves a packet out of a record and
+        // sends a packet as a record
+        byte[] payload = textPayload(300);
+        Harness harness = new Harness(FakeTlsChannel.records(packet(0, payload)), true);
+        harness.channel.setSequenceId(0);
+        Assertions.assertFalse(harness.channel.isCompressionActive());
+        Assertions.assertArrayEquals(payload, remaining(harness.channel.fetchOnePacket()));
+        harness.channel.sendAndFlush(ByteBuffer.wrap(new byte[] {8, 9}));
+        Assertions.assertArrayEquals(packet(1, new byte[] {8, 9}), FakeTlsChannel.unwrap(harness.wireBytes(), 0));
     }
 
     @Test
