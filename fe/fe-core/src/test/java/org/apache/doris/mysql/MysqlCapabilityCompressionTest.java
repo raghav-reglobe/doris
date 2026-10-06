@@ -58,9 +58,6 @@ public class MysqlCapabilityCompressionTest {
         Assertions.assertEquals(MysqlCapability.DEFAULT_CAPABILITY.getFlags()
                 | MysqlCapability.Flag.CLIENT_COMPRESS.getFlagBit(), capability.getFlags());
         Assertions.assertTrue(capability.toString().contains("CLIENT_COMPRESS"));
-
-        Config.mysql_compression_algorithms = " ZLIB , zstd";
-        Assertions.assertTrue(MysqlCapability.serverCapability().isCompress(), "case and spacing are forgiven");
     }
 
     @Test

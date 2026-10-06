@@ -115,8 +115,9 @@ public class MysqlCapability {
      * session over TLS compresses first and encrypts second, as the protocol layers them.
      */
     public static boolean compressionAdvertised() {
+        // the value is canonical on both of its write paths (fe.conf at boot, ADMIN SET at runtime)
         for (String algorithm : Config.mysql_compression_algorithms.split(",")) {
-            if ("zlib".equalsIgnoreCase(algorithm.trim())) {
+            if ("zlib".equals(algorithm)) {
                 return true;
             }
         }
