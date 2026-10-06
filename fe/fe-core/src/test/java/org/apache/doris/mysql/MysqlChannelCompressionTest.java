@@ -384,6 +384,47 @@ public class MysqlChannelCompressionTest {
     }
 
     @Test
+    public void testCloseEndsTheCompressorAndLaterFramesFailAsClosed() throws Exception {
+        Harness harness = new Harness(frame(0, packet(0, textPayload(100)), true));
+        harness.negotiateAndStart();
+        harness.channel.setSequenceId(0);
+        // a KILL or the idle reaper closes the channel from another thread through this same call
+        harness.channel.close();
+        IOException sendFailure = Assertions.assertThrows(IOException.class,
+                () -> harness.channel.sendAndFlush(ByteBuffer.wrap(textPayload(300))));
+        Assertions.assertTrue(sendFailure.getMessage().contains("closed"), sendFailure.getMessage());
+        IOException readFailure = Assertions.assertThrows(IOException.class, harness.channel::fetchOnePacket);
+        Assertions.assertTrue(readFailure.getMessage().contains("closed"), readFailure.getMessage());
+    }
+
+    @Test
+    public void testStartAfterCloseIsANoOp() throws Exception {
+        Harness harness = new Harness(new byte[0]);
+        harness.channel.setCompressionNegotiated(1);
+        harness.channel.close();
+        harness.channel.startCompressionIfNegotiated();
+        Assertions.assertFalse(harness.channel.isCompressionActive());
+    }
+
+    @Test
+    public void testReadRefusesAStreamCutBeforeItsTrailer() throws Exception {
+        byte[] whole = frame(0, packet(0, textPayload(300)), true);
+        // drop the zlib trailer (adler32, 4 bytes) and declare the shorter compressed length
+        int cut = whole.length - 4;
+        byte[] wire = Arrays.copyOf(whole, cut);
+        int compressedLen = cut - HEADER;
+        wire[0] = (byte) compressedLen;
+        wire[1] = (byte) (compressedLen >> 8);
+        wire[2] = (byte) (compressedLen >> 16);
+        Harness harness = new Harness(wire);
+        harness.negotiateAndStart();
+        harness.channel.setSequenceId(0);
+        IOException e = Assertions.assertThrows(IOException.class, harness.channel::fetchOnePacket);
+        Assertions.assertTrue(e.getMessage().contains("trailer") || e.getMessage().contains("header declared"),
+                e.getMessage());
+    }
+
+    @Test
     public void testPlainChannelIsUntouched() throws Exception {
         Harness harness = new Harness(packet(0, new byte[] {7}));
         harness.channel.setSequenceId(0);

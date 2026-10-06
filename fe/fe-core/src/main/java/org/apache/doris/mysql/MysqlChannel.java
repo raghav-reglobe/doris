@@ -118,6 +118,8 @@ public class MysqlChannel implements BytesChannel {
     // the zlib level negotiated for this connection, or -1 while the client did not ask for compression
     private int negotiatedCompressionLevel = -1;
     private volatile boolean compressionActive;
+    // set by close(): a start that races a KILL between the OK flush and the switch becomes a no-op
+    private volatile boolean closed;
     // guards the compressor and the inflater against a close() from another thread (KILL, idle reaper)
     private final Object compressionLock = new Object();
     // the compressed packet sequence id: the frame counter, reset with sequenceId at every command
@@ -220,6 +222,9 @@ public class MysqlChannel implements BytesChannel {
             return;
         }
         synchronized (compressionLock) {
+            if (closed) {
+                return;
+            }
             deflater = new Deflater(negotiatedCompressionLevel);
             inflater = new Inflater();
         }
@@ -238,6 +243,7 @@ public class MysqlChannel implements BytesChannel {
     // under the lock first, and the owner's next frame then fails as a closed channel.
     private void releaseCompression() {
         synchronized (compressionLock) {
+            closed = true;
             if (deflater != null) {
                 deflater.end();
                 deflater = null;
@@ -401,7 +407,8 @@ public class MysqlChannel implements BytesChannel {
         int seq = h[3] & 0xFF;
         int uncompressedLen = (h[4] & 0xFF) | ((h[5] & 0xFF) << 8) | ((h[6] & 0xFF) << 16);
         if (seq != compressedSequenceId) {
-            LOG.warn("receive compressed packet sequence id[" + seq + "] want to get[" + compressedSequenceId + "]");
+            LOG.warn("receive compressed packet sequence id[" + seq + "] want to get[" + compressedSequenceId
+                    + "] from " + remoteHostPortString);
             throw new IOException("Bad compressed packet sequence.");
         }
         accCompressedSequenceId();
@@ -409,7 +416,10 @@ public class MysqlChannel implements BytesChannel {
         // so the first packet of our reply is numbered from the frames we read
         sequenceId = compressedSequenceId;
         wireSequenceId = sequenceId;
+        // both scratch arrays see every frame, so an outsized one is let go even when the next frames
+        // only use the other array
         inboundCompressed = scratch(inboundCompressed, compressedLen);
+        inboundPlain = scratch(inboundPlain, uncompressedLen);
         ByteBuffer payload = ByteBuffer.wrap(inboundCompressed, 0, compressedLen);
         if (readRaw(payload) != compressedLen) {
             return false;
@@ -418,7 +428,6 @@ public class MysqlChannel implements BytesChannel {
         if (uncompressedLen == 0) {
             inflated = payload;
         } else {
-            inboundPlain = scratch(inboundPlain, uncompressedLen);
             inflate(payload, inboundPlain, uncompressedLen);
             inflated = ByteBuffer.wrap(inboundPlain, 0, uncompressedLen);
         }
@@ -444,7 +453,8 @@ public class MysqlChannel implements BytesChannel {
                     }
                     produced += n;
                 }
-                // a stream that still has output past the declared length is corrupt
+                // the output may fill exactly at the last byte before zlib has seen the trailer: give it
+                // one more call, which must produce nothing and leave the stream finished (adler32 checked)
                 if (produced == uncompressedLen && !inflater.finished() && inflater.inflate(new byte[1]) != 0) {
                     produced++;
                 }
@@ -454,6 +464,9 @@ public class MysqlChannel implements BytesChannel {
             if (produced != uncompressedLen) {
                 throw new IOException("Compressed packet inflated to " + produced + " bytes, header declared "
                         + uncompressedLen);
+            }
+            if (!inflater.finished()) {
+                throw new IOException("Compressed packet ends before its zlib trailer.");
             }
         }
     }

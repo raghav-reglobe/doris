@@ -84,9 +84,13 @@ public class ConnectionExceedTest {
             context3.setCurrentUserIdentity(UserIdentity.createAnalyzedUserIdentWithIp("test_user", "%"));
             Assertions.assertTrue(scheduler.submit(context3));
 
+            // a compression negotiated during the handshake must not start on a refused login
+            context3.getMysqlChannel().setCompressionNegotiated(1);
+
             // Create AcceptListener and handle the connection
             AcceptListener listener = new AcceptListener(scheduler);
             listener.handleConnection(context3, mockConnection);
+            Assertions.assertFalse(context3.getMysqlChannel().isCompressionActive());
             String expectedMsg = String.format(
                     "Reach limit of connections. Total: %d, User: %d, Current: %d",
                     scheduler.getConnectPoolMgr().getMaxConnections(),
