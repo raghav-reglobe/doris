@@ -387,7 +387,8 @@ FormattedScalar format_json_uuid(const std::array<uint8_t, 16>& value) {
 JsonToVariantOptions JsonToVariantOptions::current_config() {
     return {.max_json_key_length = static_cast<uint32_t>(config::variant_max_json_key_length),
             .throw_on_invalid_json = config::variant_throw_exeception_on_invalid_json,
-            .check_duplicate_json_path = config::variant_enable_duplicate_json_path_check};
+            .check_duplicate_json_path = config::variant_enable_duplicate_json_path_check,
+            .decimal_paths = nullptr};
 }
 
 struct JsonStringToVariantEncoder::Impl {
