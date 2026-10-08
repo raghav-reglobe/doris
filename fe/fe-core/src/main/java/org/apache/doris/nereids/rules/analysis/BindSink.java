@@ -71,7 +71,9 @@ import org.apache.doris.nereids.trees.expressions.NamedExpression;
 import org.apache.doris.nereids.trees.expressions.Slot;
 import org.apache.doris.nereids.trees.expressions.SlotReference;
 import org.apache.doris.nereids.trees.expressions.StatementScopeIdGenerator;
+import org.apache.doris.nereids.trees.expressions.functions.scalar.ParseToVariant;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.Substring;
+import org.apache.doris.nereids.trees.expressions.functions.scalar.TryParseToVariant;
 import org.apache.doris.nereids.trees.expressions.literal.Literal;
 import org.apache.doris.nereids.trees.expressions.literal.NullLiteral;
 import org.apache.doris.nereids.trees.expressions.visitor.DefaultExpressionRewriter;
@@ -92,6 +94,7 @@ import org.apache.doris.nereids.trees.plans.logical.UnboundLogicalSink;
 import org.apache.doris.nereids.trees.plans.visitor.InferPlanOutputAlias;
 import org.apache.doris.nereids.types.DataType;
 import org.apache.doris.nereids.types.StringType;
+import org.apache.doris.nereids.types.VariantType;
 import org.apache.doris.nereids.types.coercion.CharacterType;
 import org.apache.doris.nereids.util.ExpressionUtils;
 import org.apache.doris.nereids.util.RelationUtil;
@@ -297,6 +300,7 @@ public class BindSink implements AnalysisRuleFactory {
 
     private LogicalProject<?> getOutputProjectByCoercion(List<Column> tableSchema, LogicalPlan child,
                                                          Map<String, NamedExpression> columnToOutput) {
+        columnToOutput = retargetVariantParseOutputs(tableSchema, columnToOutput);
         List<NamedExpression> fullOutputExprs = Utils.fastToImmutableList(columnToOutput.values());
         if (child instanceof LogicalOneRowRelation) {
             // remove default value slot in one row relation
@@ -361,6 +365,47 @@ public class BindSink implements AnalysisRuleFactory {
     @VisibleForTesting
     static Expression coerceSinkExpression(Expression expression, DataType targetType) {
         return TypeCoercionUtils.castIfNotSameType(expression, targetType);
+    }
+
+    /**
+     * A VARIANT column with a Schema Template receives a {@code parse_to_variant} /
+     * {@code try_parse_to_variant} output typed with that template, so the BE parses the text with the
+     * template's DECIMAL paths in hand, the route the load planner already takes for VARIANT columns.
+     * Every other output is returned as it is.
+     */
+    @VisibleForTesting
+    static Map<String, NamedExpression> retargetVariantParseOutputs(List<Column> tableSchema,
+            Map<String, NamedExpression> columnToOutput) {
+        Map<String, NamedExpression> result = null;
+        for (Column col : tableSchema) {
+            NamedExpression expr = columnToOutput.get(col.getName());
+            if (!(expr instanceof Alias) || !col.getType().isVariantType()) {
+                continue;
+            }
+            DataType targetType = DataType.fromCatalogType(col.getType());
+            if (!(targetType instanceof VariantType)
+                    || ((VariantType) targetType).getPredefinedFields().isEmpty()) {
+                continue;
+            }
+            Expression child = ((Alias) expr).child();
+            Expression typed;
+            if (child instanceof ParseToVariant) {
+                typed = ((ParseToVariant) child).withReturnType((VariantType) targetType);
+            } else if (child instanceof TryParseToVariant) {
+                typed = ((TryParseToVariant) child).withReturnType((VariantType) targetType);
+            } else {
+                continue;
+            }
+            if (typed.getDataType().equals(child.getDataType())) {
+                continue;
+            }
+            if (result == null) {
+                result = Maps.newTreeMap(String.CASE_INSENSITIVE_ORDER);
+                result.putAll(columnToOutput);
+            }
+            result.put(col.getName(), ((Alias) expr).withChildren(ImmutableList.of(typed)));
+        }
+        return result == null ? columnToOutput : result;
     }
 
     private static Map<String, NamedExpression> getColumnToOutput(

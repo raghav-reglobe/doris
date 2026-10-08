@@ -135,6 +135,16 @@ enum TInvertedIndexFileStorageFormat {
     SNII = 4     // SNII native inverted index storage format
 }
 
+// A Schema Template path of a VARIANT column whose declared type is DECIMAL (or ARRAY<DECIMAL>). Sent
+// on the VARIANT type descriptor so the BE parses a JSON number with a fraction on that path from its
+// text instead of through a binary64 (be/src/core/value/variant/variant_decimal_paths.h).
+struct TVariantDecimalPath {
+  1: required string pattern
+  2: required bool is_glob
+  3: required i32 precision
+  4: required i32 scale
+}
+
 struct TScalarType {
     1: required TPrimitiveType type
 
@@ -150,6 +160,8 @@ struct TScalarType {
     6: optional bool variant_enable_doc_mode = false;
     // Execution-only ColumnVariantV2 marker. Table metadata never sets this field.
     7: optional bool variant_is_v2 = false;
+    // Only set for VARIANT with a Schema Template that declares DECIMAL paths (execution-only).
+    8: optional list<TVariantDecimalPath> variant_decimal_paths;
 }
 
 // Represents a field in a STRUCT type.
