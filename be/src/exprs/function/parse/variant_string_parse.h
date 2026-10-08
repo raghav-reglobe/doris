@@ -47,7 +47,7 @@ struct JsonToVariantOptions {
     // DECIMAL Schema Template paths of the destination VARIANT type; nullptr or empty means none. A
     // JSON number with a fraction on one of these paths is parsed from its text instead of through a
     // binary64 (see quote_decimal_numbers_on_paths).
-    VariantDecimalPathSetPtr decimal_paths;
+    VariantDecimalPathSetPtr decimal_paths = nullptr;
 
     // Takes a value snapshot. Later changes to mutable config do not affect an encoder.
     static JsonToVariantOptions current_config();
