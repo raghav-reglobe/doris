@@ -72,7 +72,8 @@ class BindSinkVariantDecimalPathTest {
 
         DataType target = DataType.fromCatalogType(column.getType());
         Assertions.assertInstanceOf(VariantType.class, target);
-        Assertions.assertEquals(1, ((VariantType) target).getPredefinedFields().size());
+        // Both template entries (the DECIMAL path and the STRING one) ride the nereids type.
+        Assertions.assertEquals(2, ((VariantType) target).getPredefinedFields().size());
 
         Alias typedParse = Assertions.assertInstanceOf(Alias.class, result.get("v"));
         Assertions.assertEquals(parse.getExprId(), typedParse.getExprId());
