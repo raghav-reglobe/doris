@@ -33,7 +33,7 @@ public class VariantTypeDecimalPathsThriftTest {
         TTypeDesc desc = new TTypeDesc();
         desc.setTypes(new ArrayList<>());
         type.toThrift(desc);
-        return desc.getTypes().get(desc.getTypes().size() - 1).getScalar_type();
+        return desc.getTypes().get(desc.getTypes().size() - 1).getScalarType();
     }
 
     @Test

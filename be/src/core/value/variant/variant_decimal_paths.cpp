@@ -45,7 +45,7 @@ bool VariantDecimalPathSet::matches(std::string_view path) const {
         return true;
     }
     for (const std::string& glob : _globs) {
-        if (glob_match_re2(glob, candidate)) {
+        if (variant_util::glob_match_re2(glob, candidate)) {
             return true;
         }
     }
