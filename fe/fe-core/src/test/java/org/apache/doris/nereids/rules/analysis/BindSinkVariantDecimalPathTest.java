@@ -93,7 +93,7 @@ class BindSinkVariantDecimalPathTest {
     }
 
     @Test
-    void aParseCallUnderTheSinkCastIsTypedAndTheCastDropped() {
+    void parseCallUnderTheSinkCastIsTypedAndTheCastDropped() {
         // getColumnToOutput wraps every output in a cast to the column type before the retarget runs.
         Column column = templatedVariantColumn("v");
         DataType target = DataType.fromCatalogType(column.getType());
