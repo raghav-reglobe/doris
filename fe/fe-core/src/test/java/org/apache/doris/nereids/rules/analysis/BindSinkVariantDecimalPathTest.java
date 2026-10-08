@@ -93,6 +93,28 @@ class BindSinkVariantDecimalPathTest {
     }
 
     @Test
+    void aParseCallUnderTheSinkCastIsTypedAndTheCastDropped() {
+        // getColumnToOutput wraps every output in a cast to the column type before the retarget runs.
+        Column column = templatedVariantColumn("v");
+        DataType target = DataType.fromCatalogType(column.getType());
+        SlotReference text = SlotReference.of("t", StringType.INSTANCE);
+        Alias casted = new Alias(new Cast(new ParseToVariant(text), target), "v");
+        Alias castedTry = new Alias(new Cast(new TryParseToVariant(text), target), "w");
+
+        Map<String, NamedExpression> result = BindSink.retargetVariantParseOutputs(
+                ImmutableList.of(column, templatedVariantColumn("w")), outputs(casted, castedTry));
+
+        Alias typed = Assertions.assertInstanceOf(Alias.class, result.get("v"));
+        Assertions.assertEquals(casted.getExprId(), typed.getExprId());
+        ParseToVariant call = Assertions.assertInstanceOf(ParseToVariant.class, typed.child());
+        Assertions.assertEquals(target, call.getDataType());
+        Assertions.assertSame(text, call.child());
+        TryParseToVariant tryCall = Assertions.assertInstanceOf(TryParseToVariant.class,
+                Assertions.assertInstanceOf(Alias.class, result.get("w")).child());
+        Assertions.assertEquals(target, tryCall.getDataType());
+    }
+
+    @Test
     void outputsWithoutATemplateOrWithoutAParseCallAreLeftAlone() {
         SlotReference text = SlotReference.of("t", StringType.INSTANCE);
         Alias parse = new Alias(new ParseToVariant(text), "plain");

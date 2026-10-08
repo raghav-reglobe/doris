@@ -388,15 +388,19 @@ public class BindSink implements AnalysisRuleFactory {
                 continue;
             }
             Expression child = ((Alias) expr).child();
+            // getColumnToOutput has already wrapped the output in a cast to the column type; the parse
+            // call sits under it. Typing the call makes that cast a no-op, so it is dropped here.
+            Expression call = child instanceof Cast && ((Cast) child).getDataType() instanceof VariantType
+                    ? ((Cast) child).child() : child;
             Expression typed;
-            if (child instanceof ParseToVariant) {
-                typed = ((ParseToVariant) child).withReturnType((VariantType) targetType);
-            } else if (child instanceof TryParseToVariant) {
-                typed = ((TryParseToVariant) child).withReturnType((VariantType) targetType);
+            if (call instanceof ParseToVariant) {
+                typed = ((ParseToVariant) call).withReturnType((VariantType) targetType);
+            } else if (call instanceof TryParseToVariant) {
+                typed = ((TryParseToVariant) call).withReturnType((VariantType) targetType);
             } else {
                 continue;
             }
-            if (typed.getDataType().equals(child.getDataType())) {
+            if (typed.getDataType().equals(call.getDataType())) {
                 continue;
             }
             if (result == null) {
