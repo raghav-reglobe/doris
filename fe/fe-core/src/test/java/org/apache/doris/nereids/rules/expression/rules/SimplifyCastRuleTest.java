@@ -52,8 +52,8 @@ import org.apache.doris.nereids.types.VariantType;
 import com.google.common.collect.ImmutableList;
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayList;
 import java.math.BigDecimal;
+import java.util.ArrayList;
 
 class SimplifyCastRuleTest extends ExpressionRewriteTestHelper {
 
