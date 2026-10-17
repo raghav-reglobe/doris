@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include <string>
+
 #include <limits>
 #include <type_traits>
 
@@ -335,13 +337,35 @@ struct CastToFloat {
                 DataTypeDecimal<FromCppT::PType>::get_scale_multiplier(from_scale);
         return _from_decimalv3(from, from_scale, to, scale_multiplier, params);
     }
+    // A double represents every integer below 2^53 and every power of ten up to 10^22 exactly, so
+    // dividing two such operands rounds once and yields the correctly rounded double. Past that
+    // the conversion of the unscaled integer to double already rounds, and the division rounds
+    // again: 29201.024999999998 at scale 12 came back as 29201.025, the neighbouring double.
+    // Those values go through the decimal's digits and the correctly rounded string parser.
+    template <typename NativeType, typename ToCppT>
+    static inline void decimal_to_float_exact(const NativeType& unscaled, UInt32 scale,
+                                              const NativeType& scale_multiplier, ToCppT& to) {
+        constexpr int64_t exact_integer_limit = int64_t(1) << 53;
+        bool one_rounding = scale <= 22 && std::is_same_v<ToCppT, double>;
+        if constexpr (sizeof(NativeType) > sizeof(int32_t)) {
+            one_rounding = one_rounding && unscaled < NativeType(exact_integer_limit) &&
+                           unscaled > NativeType(-exact_integer_limit);
+        }
+        if (one_rounding) {
+            to = static_cast<ToCppT>(static_cast<double>(unscaled) /
+                                     static_cast<double>(scale_multiplier));
+            return;
+        }
+        const std::string text = decimal_to_string(unscaled, scale);
+        StringParser::ParseResult result;
+        to = StringParser::string_to_float<ToCppT>(text.data(), text.size(), &result);
+    }
     template <typename FromCppT, typename ToCppT>
         requires(IsCppTypeFloat<ToCppT> && IsDecimalNumber<FromCppT> && !IsDecimalV2<FromCppT>)
     static inline bool _from_decimalv3(const FromCppT& from, UInt32 from_scale, ToCppT& to,
                                        const typename FromCppT::NativeType& scale_multiplier,
                                        CastParameters& params) {
-        to = static_cast<ToCppT>(static_cast<double>(from.value) /
-                                 static_cast<double>(scale_multiplier));
+        decimal_to_float_exact(from.value, from_scale, scale_multiplier, to);
         return true;
     }
     template <typename FromCppT, typename ToCppT>
@@ -349,8 +373,7 @@ struct CastToFloat {
     static inline bool _from_decimalv3(const FromCppT& from, UInt32 from_scale, ToCppT& to,
                                        const typename FromCppT::NativeType& scale_multiplier,
                                        CastParameters& params) {
-        to = static_cast<ToCppT>(static_cast<double>(from.value()) /
-                                 static_cast<double>(scale_multiplier));
+        decimal_to_float_exact(from.value(), from_scale, scale_multiplier, to);
         return true;
     }
 
