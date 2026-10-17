@@ -856,8 +856,6 @@ struct FunctionCastToFloatTest : public FunctionCastTest {
                                           std::is_same_v<FloatType, Float32> ? "float" : "double",
                                           type_to_string(FromT::PType), FromPrecision, FromScale);
 
-        auto scale_multiplier = decimal_scale_multiplier<typename FromT::NativeType>(
-                IsDecimalV2<FromT> ? 9 : FromScale);
         constexpr bool expect_inf =
                 (FromPrecision - FromScale >= 39 && std::is_same_v<FromT, Float32>);
         bool have_inf = false;
