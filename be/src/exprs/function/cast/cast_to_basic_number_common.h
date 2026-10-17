@@ -18,6 +18,7 @@
 #pragma once
 
 #include <string>
+#include <fast_float/fast_float.h>
 
 #include <limits>
 #include <type_traits>
@@ -356,9 +357,12 @@ struct CastToFloat {
                                      static_cast<double>(scale_multiplier));
             return;
         }
+        // Straight into the target type: a parse into double narrowed to float rounds twice and
+        // resolves an exact tie the wrong way (-9000000000.000000009 as FLOAT).
         const std::string text = decimal_to_string(unscaled, scale);
-        StringParser::ParseResult result;
-        to = StringParser::string_to_float<ToCppT>(text.data(), text.size(), &result);
+        ToCppT parsed {};
+        fast_float::from_chars(text.data(), text.data() + text.size(), parsed);
+        to = parsed;
     }
     template <typename FromCppT, typename ToCppT>
         requires(IsCppTypeFloat<ToCppT> && IsDecimalNumber<FromCppT> && !IsDecimalV2<FromCppT>)
