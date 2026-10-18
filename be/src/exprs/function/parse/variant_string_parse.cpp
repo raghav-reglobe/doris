@@ -240,8 +240,11 @@ FormattedScalar format_json_float(float value) {
 
 FormattedScalar format_json_double(double value) {
     FormattedScalar result;
-    char* end = fmt::format_to(result.bytes.data(), FMT_COMPILE("{:.{}g}"), value,
-                               std::numeric_limits<double>::digits10 + 1);
+    // The shortest representation that round-trips (fmt's default: Dragonbox). A fixed
+    // `digits10 + 1` = 16 significant digits is one short of what a binary64 can need (17), so
+    // values such as 0.30000000000000004 or 1997.6000000000001 rendered as their neighbour and
+    // every consumer that parsed the document text back stored a different double.
+    char* end = fmt::format_to(result.bytes.data(), FMT_COMPILE("{}"), value);
     result.size = end - result.bytes.data();
     return result;
 }
