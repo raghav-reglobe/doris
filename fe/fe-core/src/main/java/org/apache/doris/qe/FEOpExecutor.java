@@ -183,8 +183,8 @@ public class FEOpExecutor {
         params.setUserIp(ctx.getRemoteIP());
         params.setStmtId(ctx.getStmtId());
         params.setCurrentUserIdent(ctx.getCurrentUserIdentity().toThrift());
-        Set<String> sessionRoleOverride = ctx.getSessionRoleOverride();
-        if (sessionRoleOverride != null) {
+        if (ctx.isSessionRoleNarrowed()) {
+            Set<String> sessionRoleOverride = ctx.getSessionRoleOverride();
             // Session-narrowed (SU) session: carry the active role subset so the master authorizes
             // the forwarded statement against exactly this set, never the target's full role union.
             params.setIsSuUser(true);
