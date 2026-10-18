@@ -415,6 +415,15 @@ public class ConnectContext {
         this.authenticatedIdentity = authenticatedIdentity;
     }
 
+    /**
+     * True when SU narrowed this session: the override set (possibly empty) then replaces every role
+     * source. This predicate, not a null check on getSessionRoleOverride(), is the sentinel; a mocked
+     * context answers false here while a mocked collection getter answers an empty set.
+     */
+    public boolean isSessionRoleNarrowed() {
+        return sessionRoleOverride != null;
+    }
+
     public Set<String> getSessionRoleOverride() {
         return sessionRoleOverride;
     }
