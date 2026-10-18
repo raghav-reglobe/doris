@@ -17,11 +17,11 @@
 
 #include "core/value/variant/variant_decimal_paths.h"
 
+#include <fnmatch.h>
+
 #include <cstddef>
 #include <cstring>
 #include <utility>
-
-#include "exec/common/variant_util.h"
 
 namespace doris {
 
@@ -45,7 +45,7 @@ bool VariantDecimalPathSet::matches(std::string_view path) const {
         return true;
     }
     for (const std::string& glob : _globs) {
-        if (variant_util::glob_match_re2(glob, candidate)) {
+        if (fnmatch(glob.c_str(), candidate.c_str(), FNM_PATHNAME) == 0) {
             return true;
         }
     }
