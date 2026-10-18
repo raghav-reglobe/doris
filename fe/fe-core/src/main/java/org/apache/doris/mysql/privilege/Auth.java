@@ -2345,8 +2345,8 @@ public class Auth implements Writable {
     private void alterUserInternal(boolean ifExists, AlterUserOpType opType, UserIdentity userIdent, byte[] password,
                                    String role, PasswordOptions passwordOptions, String comment,
                                    boolean retainCurrent, boolean isReplay) throws DdlException {
-        alterUserInternal(ifExists, opType, userIdent, password, role, passwordOptions, comment, retainCurrent, isReplay,
-                null, null);
+        alterUserInternal(ifExists, opType, userIdent, password, role, passwordOptions, comment, retainCurrent,
+                isReplay, null, null);
     }
 
     private void alterUserInternal(boolean ifExists, AlterUserOpType opType, UserIdentity userIdent, byte[] password,
