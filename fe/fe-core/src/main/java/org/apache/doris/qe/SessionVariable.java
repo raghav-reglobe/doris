@@ -97,6 +97,7 @@ public class SessionVariable implements Serializable, Writable {
     public static final String MAX_SCANNERS_CONCURRENCY = "max_scanners_concurrency";
     public static final String MAX_FILE_SCANNERS_CONCURRENCY = "max_file_scanners_concurrency";
     public static final String ENABLE_FILE_SCANNER_V2 = "enable_file_scanner_v2";
+    public static final String ENABLE_FILE_CACHE_FOR_INSERT_SOURCE = "enable_file_cache_for_insert_source";
     public static final String MIN_SCANNERS_CONCURRENCY = "min_scanners_concurrency";
     public static final String MIN_FILE_SCANNERS_CONCURRENCY = "min_file_scanners_concurrency";
     public static final String MIN_SCAN_SCHEDULER_CONCURRENCY = "min_scan_scheduler_concurrency";
@@ -1179,6 +1180,13 @@ public class SessionVariable implements Serializable, Writable {
     @VarAttrDef.VarAttr(name = ENABLE_FILE_SCANNER_V2, needForward = true, description = "When enabled, "
             + "FileScanNode uses FileScannerV2 for supported query scans. Enabled by default.")
     public boolean enableFileScannerV2 = true;
+
+    @VarAttrDef.VarAttr(name = ENABLE_FILE_CACHE_FOR_INSERT_SOURCE, needForward = true, description =
+            "When enabled, source scans of INSERT ... SELECT / CTAS use the normal file cache queue "
+                    + "instead of being forced onto the disposable queue. Useful for recurring ETL whose "
+                    + "source working set is shared with interactive queries and re-read every cycle. "
+                    + "Disabled by default (preserves existing behavior).")
+    public boolean enableFileCacheForInsertSource = false;
 
     @VarAttrDef.VarAttr(name = LOCAL_EXCHANGE_FREE_BLOCKS_LIMIT)
     public int localExchangeFreeBlocksLimit = 4;
