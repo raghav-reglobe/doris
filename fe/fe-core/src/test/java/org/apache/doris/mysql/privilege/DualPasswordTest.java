@@ -22,6 +22,7 @@ import org.apache.doris.analysis.PasswordOptions;
 import org.apache.doris.analysis.RedirectStatus;
 import org.apache.doris.analysis.UserDesc;
 import org.apache.doris.analysis.UserIdentity;
+import org.apache.doris.authentication.AuthenticationIntegrationMgr;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.AuthenticationException;
@@ -80,6 +81,8 @@ public class DualPasswordTest {
         Mockito.when(env.getAuth()).thenReturn(auth);
         Mockito.when(env.getEditLog()).thenReturn(editLog);
         Mockito.when(env.getAccessManager()).thenReturn(accessManager);
+        // createUser / alterUser take the authentication-integration read lock
+        Mockito.when(env.getAuthenticationIntegrationMgr()).thenReturn(new AuthenticationIntegrationMgr());
         // ConnectContext.setEnv reads the internal catalog name
         Mockito.when(internalCatalog.getName()).thenReturn("internal");
         Mockito.when(env.getInternalCatalog()).thenReturn(internalCatalog);
