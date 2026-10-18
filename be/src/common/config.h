@@ -1628,6 +1628,15 @@ size_t get_lookup_connection_cache_block_pool_size();
 DECLARE_mInt64(LZ4_HC_compression_level);
 // Max json key length in bytes when parsing json into variant subcolumns/jsonb.
 DECLARE_mInt32(variant_max_json_key_length);
+// Accept the three legacy Parquet Variant layouts that pre-spec writers left in existing files,
+// instead of failing the read with CORRUPTION: (1) a DECIMAL typed_value leaf whose physical type
+// is wider than the shredding spec's table (INT64 for precision <= 9 - parquet-rs 59.0.0 maps a
+// precision-1 decimal that way); (2) an OPTIONAL shredded object-field / array-element wrapper
+// group (DuckDB and early parquet-rs variant writers); (3) an OPTIONAL canonical `value` column
+// with no typed_value. The decode path already handles all three (a null wrapper = absent field,
+// a null canonical value = Variant null, decimals are widened from the logical precision), only
+// the schema validator refused them. Reads of spec-clean files are unaffected.
+DECLARE_mBool(parquet_variant_lenient_legacy_layout);
 // Controls storage-layer parse target for plain non-doc VARIANT columns:
 // 0 = auto, 1 = force parse-time subcolumns, 2 = force doc-value KV staging.
 DECLARE_mInt32(variant_storage_parse_mode);
