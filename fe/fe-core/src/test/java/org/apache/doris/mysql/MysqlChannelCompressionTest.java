@@ -248,7 +248,7 @@ public class MysqlChannelCompressionTest {
 
     private static byte[] textPayload(int len) {
         byte[] bytes = new byte[len];
-        byte[] line = "2026-10-05 order 1234567 | cashify_mart.orders | 1.00 | delivered\n"
+        byte[] line = "2026-10-05 order 1234567 | sample_mart0.orders | 1.00 | delivered\n"
                 .getBytes(StandardCharsets.UTF_8);
         for (int i = 0; i < len; i++) {
             bytes[i] = line[i % line.length];
