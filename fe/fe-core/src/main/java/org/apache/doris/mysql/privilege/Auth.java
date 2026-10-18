@@ -1364,7 +1364,6 @@ public class Auth implements Writable {
                     // already passed this check). NB an EMPTY NEW password is
                     // NOT an error — it empties the secondary as well (MySQL
                     // semantics, handled in UserManager.setPassword).
-                    User user = userManager.getUserByUserIdentity(userIdent);
                     if (user == null || user.getPassword() == null
                             || user.getPassword().getPassword() == null
                             || user.getPassword().getPassword().length == 0) {
