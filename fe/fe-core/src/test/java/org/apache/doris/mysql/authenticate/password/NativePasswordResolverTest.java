@@ -51,7 +51,7 @@ class NativePasswordResolverTest {
             CachingSha2PasswordExchange.CLIENT_VERSION_ATTR, "8.0.44");
 
     private String previousMode;
-    private final MysqlHandshakePacket handshake = new MysqlHandshakePacket(1);
+    private final MysqlHandshakePacket handshake = new MysqlHandshakePacket(1, MysqlCapability.DEFAULT_CAPABILITY);
     private final MysqlChannel channel = Mockito.mock(MysqlChannel.class);
 
     @BeforeEach
