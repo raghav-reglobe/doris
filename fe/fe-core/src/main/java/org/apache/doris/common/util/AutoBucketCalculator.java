@@ -19,6 +19,7 @@ package org.apache.doris.common.util;
 
 import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.catalog.Partition;
+import org.apache.doris.catalog.PartitionType;
 import org.apache.doris.clone.DynamicPartitionScheduler;
 import org.apache.doris.common.Pair;
 import org.apache.doris.rpc.RpcException;
@@ -26,6 +27,7 @@ import org.apache.doris.rpc.RpcException;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -202,5 +204,43 @@ public class AutoBucketCalculator {
                 candidateBuckets, previousBuckets, context.getTable().getName(), context.getPartitionName());
 
         return adjustedBuckets > 0 ? adjustedBuckets : candidateBuckets;
+    }
+
+    /**
+     * Size a partition that a statement adds with BUCKETS AUTO from the partitions that already hold data:
+     * for an unpartitioned table its single partition (the one a temporary partition is about to replace),
+     * for a range table the partitions before the new one, for a list table every partition. Returns -1 when
+     * no partition has data or the visible versions cannot be read, and the caller keeps the default. The
+     * scheduler's bounds check is not applied: the statement asks for the computed count.
+     */
+    public static int calculateForExistingPartitions(OlapTable table, String partitionName) {
+        List<Partition> partitions;
+        if (table.getPartitionInfo().getType() == PartitionType.RANGE) {
+            partitions = DynamicPartitionScheduler.getHistoricalPartitions(table, partitionName);
+        } else {
+            partitions = new ArrayList<>(table.getPartitions());
+        }
+        if (partitions.isEmpty()) {
+            return -1;
+        }
+        List<Long> visibleVersions;
+        try {
+            visibleVersions = Partition.getVisibleVersions(partitions);
+        } catch (RpcException e) {
+            LOG.warn("auto bucket get visible version fail, table: [{}-{}], partition: {}, keep default buckets",
+                    table.getName(), table.getId(), partitionName, e);
+            return -1;
+        }
+        if (visibleVersions == null || visibleVersions.size() != partitions.size()) {
+            return -1;
+        }
+        List<Partition> hasDataPartitions = DynamicPartitionScheduler.filterDataPartitions(partitions, visibleVersions);
+        if (hasDataPartitions.isEmpty()) {
+            return -1;
+        }
+        int buckets = DynamicPartitionScheduler.calculateBuckets(hasDataPartitions).first;
+        LOG.info("auto bucket for added partition {} of table [{}-{}] from {} data partitions: {}",
+                partitionName, table.getName(), table.getId(), hasDataPartitions.size(), buckets);
+        return buckets;
     }
 }
