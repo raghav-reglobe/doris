@@ -104,11 +104,19 @@ public class RebucketFenceRegistry {
 
     /**
      * Called at commit for every partition a transaction wrote. Refuses the commit when the partition
-     * is fenced and the transaction began after the fence was raised.
+     * is fenced and the transaction began at or after the watershed.
+     *
+     * <p>The watershed is the id the transaction manager handed the job when it raised the fence: a
+     * fresh, never-used id from the local generator, or in cloud mode the meta-service's current
+     * maximum ({@code read_version << 10}). A transaction begun before the fence has a smaller id; one
+     * begun after it has a larger id; in cloud mode a transaction begun in the same meta-service
+     * version can carry the watershed itself, and the drain ({@code isPreviousTransactionsFinished},
+     * exclusive at its end id there) does not wait for it. Refusing {@code txnId >= watershed} makes the
+     * refused set and the drained set complementary in both modes.
      */
     public void checkCommit(OlapTable table, Partition partition, long txnId) throws LoadException {
         Fence fence = fences.get(partition.getId());
-        if (fence == null || txnId <= fence.getWatershedTxnId()) {
+        if (fence == null || txnId < fence.getWatershedTxnId()) {
             return;
         }
         throw new LoadException(FENCED_MARKER + " Table [" + table.getName() + "], Partition ["

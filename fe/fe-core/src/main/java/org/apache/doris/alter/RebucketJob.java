@@ -109,6 +109,22 @@ public class RebucketJob extends AlterJobV2 {
         this.cloudCluster = cloudCluster;
     }
 
+    /**
+     * The unfinished re-bucket job on a table, if any. One runs per table at a time: the job leaves the
+     * table NORMAL (its own partition acts need that), so the ALTER path, the cancel path and submit()
+     * ask here instead of the table state.
+     */
+    public static RebucketJob unfinishedJobOf(long tableId) {
+        List<AlterJobV2> jobs = Env.getCurrentEnv().getSchemaChangeHandler()
+                .getUnfinishedAlterJobV2ByTableId(tableId);
+        for (AlterJobV2 job : jobs) {
+            if (job instanceof RebucketJob) {
+                return (RebucketJob) job;
+            }
+        }
+        return null;
+    }
+
     /** Build, register and log a job for the named partitions (every partition when the list is empty). */
     public static RebucketJob submit(Database db, OlapTable table, List<String> partitionNames, int targetBuckets,
             String cloudCluster, String rawSql) throws UserException {
@@ -117,6 +133,11 @@ public class RebucketJob extends AlterJobV2 {
         try {
             if (table.getState() != OlapTable.OlapTableState.NORMAL) {
                 throw new UserException("Table " + table.getName() + " is " + table.getState() + ", not NORMAL");
+            }
+            RebucketJob running = unfinishedJobOf(table.getId());
+            if (running != null) {
+                throw new UserException("Table " + table.getName() + " has an unfinished REBUCKET job "
+                        + running.getJobId() + "; wait for it or cancel it with CANCEL ALTER TABLE COLUMN");
             }
             if (partitionNames == null || partitionNames.isEmpty()) {
                 for (Partition p : table.getPartitions()) {
