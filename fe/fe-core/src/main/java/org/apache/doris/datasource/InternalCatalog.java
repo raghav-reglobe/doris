@@ -2467,6 +2467,11 @@ public class InternalCatalog implements CatalogIf<Database> {
 
     // Create olap table and related base index synchronously.
     private boolean createOlapTable(Database db, CreateTableInfo createTableInfo) throws UserException {
+        // Work on a copy of the statement's properties: creation consumes keys (dynamic partition, binlog, ...)
+        // and reports what is left as unknown, and the statement may be executed again (a CTAS replanned
+        // after a version miss) with the same CreateTableInfo.
+        Map<String, String> properties = new HashMap<>(
+                createTableInfo.getProperties() == null ? Maps.newHashMap() : createTableInfo.getProperties());
         String tableName = createTableInfo.getTableName();
         if (LOG.isDebugEnabled()) {
             LOG.debug("begin create olap table: {}", tableName);
@@ -2478,7 +2483,7 @@ public class InternalCatalog implements CatalogIf<Database> {
 
         boolean tableHasExist = false;
         Pair<BinlogConfig, BinlogConfig> binlogConfigs =
-                db.getBinlogConfigsForCreateTable(createTableInfo.getProperties());
+                db.getBinlogConfigsForCreateTable(properties);
         BinlogConfig dbBinlogConfig = binlogConfigs.first;
         BinlogConfig createTableBinlogConfig = binlogConfigs.second;
         // Check the effective config, including database defaults, before adding hidden columns
@@ -2494,7 +2499,7 @@ public class InternalCatalog implements CatalogIf<Database> {
         if (createTableInfo.isTemp() && createTableBinlogConfig.isEnableForCCR()) {
             throw new DdlException("Cannot create temporary table with binlog enable");
         }
-        createTableInfo.getProperties().putAll(createTableBinlogConfig.toProperties());
+        properties.putAll(createTableBinlogConfig.toProperties());
         createTableInfo.createRowBinlogHiddenColumnsIfNecessary(createTableBinlogConfig);
 
         // get keys type
@@ -2510,7 +2515,7 @@ public class InternalCatalog implements CatalogIf<Database> {
         checkAutoIncColumns(baseSchema, keysType);
 
         // analyze replica allocation
-        ReplicaAllocation replicaAlloc = PropertyAnalyzer.analyzeReplicaAllocation(createTableInfo.getProperties(), "");
+        ReplicaAllocation replicaAlloc = PropertyAnalyzer.analyzeReplicaAllocation(properties, "");
         if (replicaAlloc.isNotSet()) {
             replicaAlloc = ReplicaAllocation.DEFAULT_ALLOCATION;
         }
@@ -2532,7 +2537,7 @@ public class InternalCatalog implements CatalogIf<Database> {
             }
             partitionInfo = partitionDesc.toPartitionInfo(baseSchema, partitionNameToId, false);
         } else {
-            if (DynamicPartitionUtil.checkDynamicPartitionPropertiesExist(createTableInfo.getProperties())) {
+            if (DynamicPartitionUtil.checkDynamicPartitionPropertiesExist(properties)) {
                 throw new DdlException("Only support dynamic partition properties on range partition table");
             }
             long partitionId = idGeneratorBuffer.getNextId();
@@ -2553,7 +2558,7 @@ public class InternalCatalog implements CatalogIf<Database> {
         }
 
         // calc short key column count
-        short shortKeyColumnCount = Env.calcShortKeyColumnCount(baseSchema, createTableInfo.getProperties(),
+        short shortKeyColumnCount = Env.calcShortKeyColumnCount(baseSchema, properties,
                 isKeysRequired);
         if (LOG.isDebugEnabled()) {
             LOG.debug("create table[{}] short key column count: {}", tableName, shortKeyColumnCount);
@@ -2580,7 +2585,6 @@ public class InternalCatalog implements CatalogIf<Database> {
 
         // set base index info to table
         // this should be done before create partition.
-        Map<String, String> properties = createTableInfo.getProperties();
 
         if (createTableInfo.isTemp()) {
             properties.put("binlog.enable", "false");
@@ -3083,7 +3087,7 @@ public class InternalCatalog implements CatalogIf<Database> {
             partitionId = partitionNameToId.get(Util.getTempTableDisplayName(tableName));
             DataProperty dataProperty = null;
             try {
-                dataProperty = PropertyAnalyzer.analyzeDataProperty(createTableInfo.getProperties(),
+                dataProperty = PropertyAnalyzer.analyzeDataProperty(properties,
                     new DataProperty(DataProperty.DEFAULT_STORAGE_MEDIUM));
                 olapTable.setStorageMedium(dataProperty.getStorageMedium());
             } catch (AnalysisException e) {
@@ -3300,7 +3304,7 @@ public class InternalCatalog implements CatalogIf<Database> {
             } else if (partitionInfo.getType() == PartitionType.RANGE
                     || partitionInfo.getType() == PartitionType.LIST) {
                 try {
-                    DataProperty dataProperty = PropertyAnalyzer.analyzeDataProperty(createTableInfo.getProperties(),
+                    DataProperty dataProperty = PropertyAnalyzer.analyzeDataProperty(properties,
                         new DataProperty(DataProperty.DEFAULT_STORAGE_MEDIUM));
                     Map<String, String> propertiesCheck = new HashMap<>(properties);
                     propertiesCheck.entrySet().removeIf(entry -> entry.getKey().contains("dynamic_partition"));
