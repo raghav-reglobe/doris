@@ -22,6 +22,7 @@ import org.apache.doris.alter.AlterJobV2;
 import org.apache.doris.alter.AlterJobV2.JobType;
 import org.apache.doris.alter.MaterializedViewHandler;
 import org.apache.doris.alter.QuotaType;
+import org.apache.doris.alter.RebucketFenceRegistry;
 import org.apache.doris.alter.SchemaChangeHandler;
 import org.apache.doris.alter.SystemHandler;
 import org.apache.doris.analysis.DistributionDesc;
@@ -587,6 +588,7 @@ public class Env {
     private EventProcessor eventProcessor;
 
     private InsertOverwriteManager insertOverwriteManager;
+    private RebucketFenceRegistry rebucketFenceRegistry;
 
     private DNSCache dnsCache;
 
@@ -891,6 +893,7 @@ public class Env {
         this.mtmvService = new MTMVService();
         this.eventProcessor = new EventProcessor(mtmvService);
         this.insertOverwriteManager = new InsertOverwriteManager();
+        this.rebucketFenceRegistry = new RebucketFenceRegistry();
         this.dnsCache = new DNSCache();
         this.sqlCacheManager = new NereidsSqlCacheManager();
         this.sortedPartitionsCacheManager = new NereidsSortedPartitionsCacheManager();
@@ -1017,6 +1020,10 @@ public class Env {
 
     public InsertOverwriteManager getInsertOverwriteManager() {
         return insertOverwriteManager;
+    }
+
+    public RebucketFenceRegistry getRebucketFenceRegistry() {
+        return rebucketFenceRegistry;
     }
 
     public TabletScheduler getTabletScheduler() {

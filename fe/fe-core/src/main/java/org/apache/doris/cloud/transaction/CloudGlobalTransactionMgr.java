@@ -1036,6 +1036,8 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
                 // this can happen when partitionId == -1 (tablet being dropping) or partition really not exist.
                 continue;
             }
+            Env.getCurrentEnv().getRebucketFenceRegistry().checkCommit(tbl, tbl.getPartition(partitionId),
+                    commitTxnRequest.getTxnId());
             tableToPartition.computeIfAbsent(tbl, k -> Sets.newHashSet()).add(partitionId);
             commitIndexIds.add(tabletMeta.getIndexId());
         }
