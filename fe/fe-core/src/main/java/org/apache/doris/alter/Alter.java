@@ -84,6 +84,7 @@ import org.apache.doris.nereids.trees.plans.commands.info.ModifyDistributionOp;
 import org.apache.doris.nereids.trees.plans.commands.info.ModifyPartitionOp;
 import org.apache.doris.nereids.trees.plans.commands.info.ModifyTableCommentOp;
 import org.apache.doris.nereids.trees.plans.commands.info.ModifyTablePropertiesOp;
+import org.apache.doris.nereids.trees.plans.commands.info.RebucketOp;
 import org.apache.doris.nereids.trees.plans.commands.info.RenameColumnOp;
 import org.apache.doris.nereids.trees.plans.commands.info.RenamePartitionOp;
 import org.apache.doris.nereids.trees.plans.commands.info.RenameRollupOp;
@@ -364,6 +365,16 @@ public class Alter {
             AlterOp alterOp = alterOps.get(0);
             Env.getCurrentEnv()
                     .modifyDefaultDistributionBucketNum(db, olapTable, (ModifyDistributionOp) alterOp);
+        } else if (currentAlterOps.contains(AlterOpType.REBUCKET)) {
+            Preconditions.checkState(alterOps.size() == 1);
+            RebucketOp op = (RebucketOp) alterOps.get(0);
+            String cloudCluster = null;
+            try {
+                cloudCluster = ConnectContext.get() == null ? null : ConnectContext.get().getCloudCluster();
+            } catch (Exception e) {
+                LOG.info("rebucket: no cloud cluster on the session, the job uses the default: {}", e.getMessage());
+            }
+            RebucketJob.submit(db, olapTable, op.getPartitionNames(), op.getBuckets(), cloudCluster, op.toSql());
         } else if (currentAlterOps.contains(AlterOpType.MODIFY_COLUMN_COMMENT)) {
             processModifyColumnComment(db, olapTable, alterOps);
         } else if (currentAlterOps.contains(AlterOpType.MODIFY_TABLE_COMMENT)) {

@@ -1017,6 +1017,7 @@ alterTableClause
     | ENABLE FEATURE name=STRING_LITERAL (WITH properties=propertyClause)?          #enableFeatureClause
     | MODIFY DISTRIBUTION (DISTRIBUTED BY (HASH hashKeys=identifierList | RANDOM)
         (BUCKETS (INTEGER_VALUE | autoBucket=AUTO))?)?                              #modifyDistributionClause
+    | REBUCKET partitionSpec? BUCKETS (INTEGER_VALUE | autoBucket=AUTO)              #rebucketClause
     | MODIFY COMMENT comment=STRING_LITERAL                                         #modifyTableCommentClause
     | MODIFY COLUMN name=qualifiedName COMMENT comment=STRING_LITERAL               #modifyColumnCommentClause
     | ADD TEMPORARY? PARTITIONS
@@ -2550,6 +2551,7 @@ nonReserved
     | QUEUED
     | RANDOM
     | RECENT
+    | REBUCKET
     | RECOVER
     | RECURSIVE
     | RECYCLE

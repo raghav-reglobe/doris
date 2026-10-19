@@ -78,6 +78,7 @@ import org.apache.doris.mtmv.MTMVRefreshInfo;
 import org.apache.doris.mtmv.MTMVRefreshSchedule;
 import org.apache.doris.mtmv.MTMVRefreshTriggerInfo;
 import org.apache.doris.mtmv.ivm.IvmDryRunLimit;
+import org.apache.doris.nereids.DorisParser.RebucketClauseContext;
 import org.apache.doris.nereids.DorisParser;
 import org.apache.doris.nereids.DorisParser.AddBackendClauseContext;
 import org.apache.doris.nereids.DorisParser.AddBrokerClauseContext;
@@ -1013,6 +1014,7 @@ import org.apache.doris.nereids.trees.plans.commands.info.RenameRollupOp;
 import org.apache.doris.nereids.trees.plans.commands.info.RenameTableOp;
 import org.apache.doris.nereids.trees.plans.commands.info.ReorderColumnsOp;
 import org.apache.doris.nereids.trees.plans.commands.info.ReplacePartitionFieldOp;
+import org.apache.doris.nereids.trees.plans.commands.info.RebucketOp;
 import org.apache.doris.nereids.trees.plans.commands.info.ReplacePartitionOp;
 import org.apache.doris.nereids.trees.plans.commands.info.ReplaceTableOp;
 import org.apache.doris.nereids.trees.plans.commands.info.ResumeMTMVInfo;
@@ -6582,6 +6584,20 @@ public class LogicalPlanBuilder extends DorisParserBaseVisitor<Object> {
                 ? Maps.newHashMap(visitPropertyClause(ctx.properties))
                 : Maps.newHashMap();
         return new EnableFeatureOp(featureName, properties);
+    }
+
+    @Override
+    public AlterTableOp visitRebucketClause(RebucketClauseContext ctx) {
+        List<String> partitionNames = null;
+        if (ctx.partitionSpec() != null) {
+            Pair<Boolean, List<String>> spec = visitPartitionSpec(ctx.partitionSpec());
+            if (spec.first) {
+                throw new ParseException("REBUCKET applies to formal partitions, not temporary ones", ctx);
+            }
+            partitionNames = spec.second;
+        }
+        int buckets = ctx.AUTO() != null ? RebucketOp.BUCKETS_AUTO : Integer.parseInt(ctx.INTEGER_VALUE().getText());
+        return new RebucketOp(partitionNames, buckets);
     }
 
     @Override
