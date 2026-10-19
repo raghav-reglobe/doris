@@ -241,6 +241,11 @@ public class Alter {
         }
 
         olapTable.checkNormalStateForAlter();
+        RebucketJob rebucketJob = RebucketJob.unfinishedJobOf(olapTable.getId());
+        if (rebucketJob != null) {
+            throw new DdlException("Table[" + olapTable.getName() + "] has an unfinished REBUCKET job "
+                    + rebucketJob.getJobId() + ". Wait for it or cancel it with CANCEL ALTER TABLE COLUMN");
+        }
         boolean needProcessOutsideTableLock = false;
         BaseTableInfo oldBaseTableInfo = new BaseTableInfo(olapTable);
         Optional<BaseTableInfo> newBaseTableInfo = Optional.empty();

@@ -37,6 +37,8 @@ public class RebucketDdlTest extends TestWithFeService {
         createDatabase("rbd");
         createTable("CREATE TABLE rbd.t (k BIGINT NOT NULL, v VARCHAR(32)) DUPLICATE KEY(k)"
                 + " DISTRIBUTED BY HASH(k) BUCKETS 4 PROPERTIES (\"replication_num\" = \"1\")");
+        createTable("CREATE TABLE rbd.t2 (k BIGINT NOT NULL, v VARCHAR(32)) DUPLICATE KEY(k)"
+                + " DISTRIBUTED BY HASH(k) BUCKETS 4 PROPERTIES (\"replication_num\" = \"1\")");
     }
 
     private List<RebucketJob> jobsOf(long tableId) {
@@ -57,10 +59,12 @@ public class RebucketDdlTest extends TestWithFeService {
         Assertions.assertEquals(3, jobs.get(0).getTargetBuckets());
         Assertions.assertEquals(List.of(partitionId), jobs.get(0).getPartitionIds());
 
-        alterTableSync("ALTER TABLE rbd.t REBUCKET PARTITION (t) BUCKETS AUTO");
-        jobs = jobsOf(table.getId());
-        Assertions.assertEquals(2, jobs.size());
-        Assertions.assertTrue(jobs.stream().anyMatch(j -> j.getTargetBuckets() == RebucketJob.BUCKETS_AUTO));
+        // one job per table at a time: the AUTO form goes to a second table
+        OlapTable table2 = (OlapTable) db.getTableOrDdlException("t2");
+        alterTableSync("ALTER TABLE rbd.t2 REBUCKET PARTITION (t2) BUCKETS AUTO");
+        List<RebucketJob> jobs2 = jobsOf(table2.getId());
+        Assertions.assertEquals(1, jobs2.size());
+        Assertions.assertEquals(RebucketJob.BUCKETS_AUTO, jobs2.get(0).getTargetBuckets());
     }
 
     @Test
