@@ -78,7 +78,7 @@ public class RebucketJob extends AlterJobV2 {
     private static final Logger LOG = LogManager.getLogger(RebucketJob.class);
 
     public static final int BUCKETS_AUTO = -1;
-    private static final String TEMP_PREFIX = "__rb_";
+    private static final String TEMP_PREFIX = "rbtmp_";
 
     @SerializedName(value = "pids")
     private List<Long> partitionIds = Lists.newArrayList();
@@ -193,7 +193,8 @@ public class RebucketJob extends AlterJobV2 {
             return;
         }
         Partition p = currentPartition(table);
-        tempPartitionName = TEMP_PREFIX + p.getName() + "_" + jobId;
+        // a valid partition name (letter first, no leading underscore), unique per job and partition
+        tempPartitionName = TEMP_PREFIX + jobId + "_" + p.getId();
         addTempPartition(db, table, p);
         int tempBuckets = table.getPartition(tempPartitionName, true).getDistributionInfo().getBucketNum();
         if (targetBuckets == BUCKETS_AUTO && tempBuckets == p.getDistributionInfo().getBucketNum()) {
