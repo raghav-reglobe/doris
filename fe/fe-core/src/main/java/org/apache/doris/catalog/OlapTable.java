@@ -318,6 +318,17 @@ public class OlapTable extends Table implements MTMVRelatedTableIf, GsonPostProc
                 String.valueOf(isBeingSynced));
     }
 
+    public void setAutoRebucket(boolean autoRebucket) {
+        getOrCreatTableProperty().modifyTableProperties(PropertyAnalyzer.PROPERTIES_AUTO_REBUCKET,
+                String.valueOf(autoRebucket));
+        getOrCreatTableProperty().buildAutoRebucket();
+    }
+
+    /** false = the drift checker leaves this table alone (property auto_rebucket = false) */
+    public boolean isAutoRebucket() {
+        return tableProperty == null || tableProperty.isAutoRebucket();
+    }
+
     public String getStorageVaultName() {
         if (Strings.isNullOrEmpty(getStorageVaultId())) {
             return "";

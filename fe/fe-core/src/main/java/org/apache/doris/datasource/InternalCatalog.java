@@ -2928,6 +2928,9 @@ public class InternalCatalog implements CatalogIf<Database> {
 
         boolean isBeingSynced = PropertyAnalyzer.analyzeIsBeingSynced(properties, false);
         olapTable.setIsBeingSynced(isBeingSynced);
+        if (!PropertyAnalyzer.analyzeAutoRebucket(properties, true)) {
+            olapTable.setAutoRebucket(false);
+        }
         if (isBeingSynced) {
             // erase colocate table, storage policy
             olapTable.ignoreInvalidPropertiesWhenSynced(properties);

@@ -25,6 +25,7 @@ import org.apache.doris.alter.QuotaType;
 import org.apache.doris.alter.RebucketFenceRegistry;
 import org.apache.doris.alter.SchemaChangeHandler;
 import org.apache.doris.alter.SystemHandler;
+import org.apache.doris.alter.TabletSizeDriftChecker;
 import org.apache.doris.analysis.DistributionDesc;
 import org.apache.doris.analysis.Expr;
 import org.apache.doris.analysis.ExprToSqlVisitor;
@@ -532,6 +533,7 @@ public class Env {
     private SmallFileMgr smallFileMgr;
 
     private DynamicPartitionScheduler dynamicPartitionScheduler;
+    private TabletSizeDriftChecker tabletSizeDriftChecker;
 
     private PluginMgr pluginMgr;
 
@@ -703,6 +705,10 @@ public class Env {
         return this.dynamicPartitionScheduler;
     }
 
+    public TabletSizeDriftChecker getTabletSizeDriftChecker() {
+        return tabletSizeDriftChecker;
+    }
+
     public CatalogMgr getCatalogMgr() {
         return catalogMgr;
     }
@@ -857,6 +863,8 @@ public class Env {
 
         this.dynamicPartitionScheduler = new DynamicPartitionScheduler("DynamicPartitionScheduler",
                 Config.dynamic_partition_check_interval_seconds * 1000L);
+        this.tabletSizeDriftChecker = new TabletSizeDriftChecker("TabletSizeDriftChecker",
+                Config.auto_rebucket_check_interval_s * 1000L);
 
         this.metaDir = Config.meta_dir;
         this.bdbDir = this.metaDir + BDB_DIR;
@@ -2078,6 +2086,7 @@ public class Env {
         routineLoadTaskScheduler.start();
         // start dynamic partition task
         dynamicPartitionScheduler.start();
+        tabletSizeDriftChecker.start();
         // start daemon thread to update db used data quota for db txn manager periodically
         dbUsedDataQuotaInfoCollector.start();
         if (Config.enable_storage_policy) {
@@ -6462,6 +6471,7 @@ public class Env {
                 .buildStoragePolicy()
                 .buildStorageMedium()
                 .buildIsBeingSynced()
+                .buildAutoRebucket()
                 .buildCompactionPolicy()
                 .buildTimeSeriesCompactionGoalSizeMbytes()
                 .buildTimeSeriesCompactionFileCountThreshold()
