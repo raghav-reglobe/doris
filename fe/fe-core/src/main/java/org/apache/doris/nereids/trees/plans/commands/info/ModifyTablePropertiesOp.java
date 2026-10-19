@@ -170,6 +170,12 @@ public class ModifyTablePropertiesOp extends AlterTableOp {
         } else if (properties.containsKey(PropertyAnalyzer.PROPERTIES_IS_BEING_SYNCED)) {
             setIsBeingSynced(Boolean.parseBoolean(properties.getOrDefault(
                     PropertyAnalyzer.PROPERTIES_IS_BEING_SYNCED, "false")));
+        } else if (properties.containsKey(PropertyAnalyzer.PROPERTIES_AUTO_REBUCKET)) {
+            String value = properties.get(PropertyAnalyzer.PROPERTIES_AUTO_REBUCKET);
+            if (!"true".equalsIgnoreCase(value) && !"false".equalsIgnoreCase(value)) {
+                throw new AnalysisException("Property " + PropertyAnalyzer.PROPERTIES_AUTO_REBUCKET
+                        + " must be true or false");
+            }
         } else if (TableProperty.isSamePrefixProperties(properties, PropertyAnalyzer.PROPERTIES_BINLOG_PREFIX)) {
             // validate binlog.* properties
             PropertyAnalyzer.analyzeBinlogConfig(new java.util.HashMap<>(properties));
