@@ -2823,6 +2823,7 @@ public class SchemaChangeHandler extends AlterHandler {
                 add(PropertyAnalyzer.PROPERTIES_INMEMORY);
                 add(PropertyAnalyzer.PROPERTIES_STORAGE_POLICY);
                 add(PropertyAnalyzer.PROPERTIES_IS_BEING_SYNCED);
+                add(PropertyAnalyzer.PROPERTIES_AUTO_REBUCKET);
                 add(PropertyAnalyzer.PROPERTIES_COMPACTION_POLICY);
                 add(PropertyAnalyzer.PROPERTIES_TIME_SERIES_COMPACTION_GOAL_SIZE_MBYTES);
                 add(PropertyAnalyzer.PROPERTIES_TIME_SERIES_COMPACTION_FILE_COUNT_THRESHOLD);
@@ -2929,6 +2930,7 @@ public class SchemaChangeHandler extends AlterHandler {
         if (isInMemory < 0 && storagePolicyId < 0 && compactionPolicy == null && timeSeriesCompactionConfig.isEmpty()
                 && verticalCompactionNumColumnsPerGroup < 0
                 && !properties.containsKey(PropertyAnalyzer.PROPERTIES_IS_BEING_SYNCED)
+                && !properties.containsKey(PropertyAnalyzer.PROPERTIES_AUTO_REBUCKET)
                 && !properties.containsKey(PropertyAnalyzer.PROPERTIES_ENABLE_MOW_LIGHT_DELETE)
                 && !properties.containsKey(PropertyAnalyzer.PROPERTIES_DISABLE_AUTO_COMPACTION)
                 && !properties.containsKey(PropertyAnalyzer.PROPERTIES_GROUP_COMMIT_INTERVAL_MS)

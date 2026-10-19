@@ -79,6 +79,7 @@ public class TableProperty implements GsonPostProcessable {
 
     private String storagePolicy = "";
     private Boolean isBeingSynced = null;
+    private Boolean autoRebucket = null;
     private BinlogConfig binlogConfig;
 
     private TStorageMedium storageMedium = null;
@@ -171,6 +172,7 @@ public class TableProperty implements GsonPostProcessable {
                 buildStorageMedium();
                 buildStoragePolicy();
                 buildIsBeingSynced();
+                buildAutoRebucket();
                 buildCompactionPolicy();
                 buildTimeSeriesCompactionGoalSizeMbytes();
                 buildTimeSeriesCompactionFileCountThreshold();
@@ -562,6 +564,18 @@ public class TableProperty implements GsonPostProcessable {
 
     public String getStoragePolicy() {
         return storagePolicy;
+    }
+
+    public TableProperty buildAutoRebucket() {
+        autoRebucket = Boolean.parseBoolean(properties.getOrDefault(PropertyAnalyzer.PROPERTIES_AUTO_REBUCKET, "true"));
+        return this;
+    }
+
+    public boolean isAutoRebucket() {
+        if (autoRebucket == null) {
+            buildAutoRebucket();
+        }
+        return autoRebucket;
     }
 
     public TableProperty buildIsBeingSynced() {

@@ -201,6 +201,7 @@ public class PropertyAnalyzer {
     public static final String PROPERTIES_MUTABLE = "mutable";
 
     public static final String PROPERTIES_IS_BEING_SYNCED = "is_being_synced";
+    public static final String PROPERTIES_AUTO_REBUCKET = "auto_rebucket";
 
     // binlog.*
     public static final String PROPERTIES_BINLOG_PREFIX = "binlog.";
@@ -1619,6 +1620,15 @@ public class PropertyAnalyzer {
     public static boolean analyzeIsBeingSynced(Map<String, String> properties, boolean defaultValue) {
         if (properties != null && properties.containsKey(PROPERTIES_IS_BEING_SYNCED)) {
             String value = properties.remove(PROPERTIES_IS_BEING_SYNCED);
+            return Boolean.valueOf(value);
+        }
+        return defaultValue;
+    }
+
+    /** auto_rebucket = false keeps the drift checker off this table; absent = allowed. */
+    public static boolean analyzeAutoRebucket(Map<String, String> properties, boolean defaultValue) {
+        if (properties != null && properties.containsKey(PROPERTIES_AUTO_REBUCKET)) {
+            String value = properties.remove(PROPERTIES_AUTO_REBUCKET);
             return Boolean.valueOf(value);
         }
         return defaultValue;

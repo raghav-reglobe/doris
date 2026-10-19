@@ -1394,6 +1394,32 @@ public class Config extends ConfigBase {
     @ConfField(mutable = true, masterOnly = true)
     public static boolean dynamic_partition_enable = true;
 
+    @ConfField(mutable = true, masterOnly = true, description = "Let the master re-bucket partitions whose "
+            + "tablet count has drifted outside the auto-bucket size bands: the drift checker schedules "
+            + "ALTER TABLE ... REBUCKET ... BUCKETS AUTO for them. Off by default; a table opts out with the "
+            + "property auto_rebucket = false.")
+    public static boolean enable_auto_rebucket = false;
+
+    @ConfField(mutable = true, masterOnly = true, description = "How often the drift checker walks the partitions.")
+    public static int auto_rebucket_check_interval_s = 3600;
+
+    @ConfField(mutable = true, masterOnly = true, description = "A partition is re-bucketed only when its tablet "
+            + "count is below want / (1 + hysteresis) or above want * (1 + hysteresis), want being the auto-bucket "
+            + "count for its stored size.")
+    public static double auto_rebucket_hysteresis = 1.0;
+
+    @ConfField(mutable = true, masterOnly = true, description = "The newest period of a dynamic or "
+            + "auto-partitioned table is left alone until its visible version has not changed for this long: "
+            + "it is still being filled.")
+    public static int auto_rebucket_min_quiet_s = 3600;
+
+    @ConfField(mutable = true, masterOnly = true, description = "Partitions larger than this are reported as "
+            + "candidates but not re-bucketed automatically.")
+    public static long auto_rebucket_max_partition_bytes = 50L * 1024 * 1024 * 1024;
+
+    @ConfField(mutable = true, masterOnly = true, description = "Re-bucket jobs the checker keeps running at once.")
+    public static int auto_rebucket_max_concurrent_jobs = 1;
+
     /**
      * control rollup job concurrent limit
      */
