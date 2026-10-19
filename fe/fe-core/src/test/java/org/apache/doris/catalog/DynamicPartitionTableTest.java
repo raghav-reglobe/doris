@@ -34,6 +34,7 @@ import org.apache.doris.mysql.authenticate.TestLogAppender;
 import org.apache.doris.nereids.parser.NereidsParser;
 import org.apache.doris.nereids.trees.plans.commands.AlterTableCommand;
 import org.apache.doris.nereids.trees.plans.commands.CreateTableCommand;
+import org.apache.doris.nereids.trees.plans.commands.info.CreateTableInfo;
 import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
 import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.qe.SessionVariable;
@@ -3731,5 +3732,31 @@ public class DynamicPartitionTableTest extends TestWithFeService {
         } finally {
             connectContext.getSessionVariable().setTimeZone(originalTimeZone);
         }
+    }
+
+    @Test
+    public void testCreateTableInfoCanBeExecutedAgain() throws Exception {
+        // A statement that is run again with the same CreateTableInfo (a CTAS replanned after a version miss)
+        // must create the table as the first run did: creation may not consume the statement's properties.
+        String sql = "CREATE TABLE test.dyn_reuse (k1 date NULL, k2 int NULL) ENGINE=OLAP DUPLICATE KEY(k1, k2)"
+                + " PARTITION BY RANGE (k1) () DISTRIBUTED BY HASH(k1) BUCKETS 1 PROPERTIES ("
+                + "\"replication_num\" = \"1\", \"dynamic_partition.enable\" = \"true\","
+                + " \"dynamic_partition.start\" = \"-1\", \"dynamic_partition.end\" = \"1\","
+                + " \"dynamic_partition.time_unit\" = \"day\", \"dynamic_partition.prefix\" = \"p\")";
+        CreateTableCommand command = (CreateTableCommand) new NereidsParser().parseSingle(sql);
+        CreateTableInfo info = command.getCreateTableInfo();
+        info.validate(connectContext);
+        Env.getCurrentEnv().createTable(info);
+        Database db = Env.getCurrentInternalCatalog().getDbOrAnalysisException("test");
+        OlapTable first = (OlapTable) db.getTableOrAnalysisException("dyn_reuse");
+        Assertions.assertTrue(first.getTableProperty().getDynamicPartitionProperty().getEnable());
+        Assertions.assertFalse(first.getPartitionNames().isEmpty());
+
+        dropTable("test.dyn_reuse", true);
+        info.validate(connectContext);
+        Env.getCurrentEnv().createTable(info);
+        OlapTable second = (OlapTable) db.getTableOrAnalysisException("dyn_reuse");
+        Assertions.assertTrue(second.getTableProperty().getDynamicPartitionProperty().getEnable());
+        Assertions.assertFalse(second.getPartitionNames().isEmpty());
     }
 }
