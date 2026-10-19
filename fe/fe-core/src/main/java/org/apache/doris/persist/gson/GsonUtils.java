@@ -20,6 +20,7 @@ package org.apache.doris.persist.gson;
 import org.apache.doris.alter.AlterJobV2;
 import org.apache.doris.alter.CloudRollupJobV2;
 import org.apache.doris.alter.CloudSchemaChangeJobV2;
+import org.apache.doris.alter.RebucketJob;
 import org.apache.doris.alter.RollupJobV2;
 import org.apache.doris.alter.SchemaChangeJobV2;
 import org.apache.doris.analysis.ArithmeticExpr;
@@ -325,7 +326,8 @@ public class GsonUtils {
     static {
         alterJobV2TypeAdapterFactory = RuntimeTypeAdapterFactory.of(AlterJobV2.class, "clazz")
                 .registerSubtype(CloudSchemaChangeJobV2.class, CloudSchemaChangeJobV2.class.getSimpleName())
-                .registerSubtype(CloudRollupJobV2.class, CloudRollupJobV2.class.getSimpleName());
+                .registerSubtype(CloudRollupJobV2.class, CloudRollupJobV2.class.getSimpleName())
+                .registerSubtype(RebucketJob.class, RebucketJob.class.getSimpleName());
         if (Config.isNotCloudMode()) {
             alterJobV2TypeAdapterFactory
                     .registerSubtype(RollupJobV2.class, RollupJobV2.class.getSimpleName())
