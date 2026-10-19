@@ -446,6 +446,10 @@ public class RebucketJob extends AlterJobV2 {
         Text.writeString(out, GsonUtils.GSON.toJson(this));
     }
 
+    public int getTargetBuckets() {
+        return targetBuckets;
+    }
+
     public List<Long> getPartitionIds() {
         return partitionIds;
     }
