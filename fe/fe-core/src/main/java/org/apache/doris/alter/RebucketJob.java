@@ -256,22 +256,31 @@ public class RebucketJob extends AlterJobV2 {
             throw new AlterCancelException("partition " + partitionIds.get(cursor) + " vanished");
         }
         int before = p.getDistributionInfo().getBucketNum();
+        RebucketFenceRegistry registry = Env.getCurrentEnv().getRebucketFenceRegistry();
+        RebucketFenceRegistry.Fence fence = registry.getFence(p.getId());
+        long fencedAtMs = fence == null ? System.currentTimeMillis() : fence.getFencedAtMs();
         try {
             Map<String, String> props = Maps.newHashMap();
             props.put("strict_range", "false");
             props.put("use_temp_partition_name", "false");
-            Env.getCurrentEnv().replaceTempPartition(db, table, new ReplacePartitionOp(
-                    new PartitionNamesInfo(false, Lists.newArrayList(p.getName())),
-                    new PartitionNamesInfo(true, Lists.newArrayList(tempPartitionName)), false, props));
+            // the swap expects the caller to hold the table's write lock, as the ALTER path does
+            table.writeLockOrDdlException();
+            try {
+                Env.getCurrentEnv().replaceTempPartition(db, table, new ReplacePartitionOp(
+                        new PartitionNamesInfo(false, Lists.newArrayList(p.getName())),
+                        new PartitionNamesInfo(true, Lists.newArrayList(tempPartitionName)), false, props));
+            } finally {
+                table.writeUnlock();
+            }
         } catch (Exception e) {
-            throw new AlterCancelException("swap failed: " + e.getMessage());
+            throw new AlterCancelException("swap failed: " + e);
         } finally {
-            Env.getCurrentEnv().getRebucketFenceRegistry().unfence(table, p);
+            registry.unfence(table, p);
         }
         Partition after = table.getPartition(p.getName());
         results.put(partitionIds.get(cursor), before + " -> " + after.getDistributionInfo().getBucketNum());
         LOG.info("rebucket job {}: partition {} {} -> {} buckets, fence held {} ms", jobId, p.getName(), before,
-                after.getDistributionInfo().getBucketNum(), 0);
+                after.getDistributionInfo().getBucketNum(), System.currentTimeMillis() - fencedAtMs);
         cursor++;
         tempPartitionName = null;
         fenceWatershedTxnId = -1;
@@ -326,10 +335,16 @@ public class RebucketJob extends AlterJobV2 {
             return;
         }
         try {
-            Env.getCurrentEnv().dropPartition(db, table, new DropPartitionOp(true, tempPartitionName, true, true));
+            table.writeLockOrDdlException();
+            try {
+                Env.getCurrentEnv().dropPartition(db, table,
+                        new DropPartitionOp(true, tempPartitionName, true, true));
+            } finally {
+                table.writeUnlock();
+            }
         } catch (Exception e) {
             LOG.warn("rebucket job {}: dropping temp partition {} failed: {}", jobId, tempPartitionName,
-                    e.getMessage());
+                    e.toString());
         }
         tempPartitionName = null;
     }
