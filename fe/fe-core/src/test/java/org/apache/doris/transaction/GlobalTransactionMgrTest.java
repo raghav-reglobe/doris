@@ -17,6 +17,7 @@
 
 package org.apache.doris.transaction;
 
+import org.apache.doris.alter.RebucketFenceRegistry;
 import org.apache.doris.analysis.UserIdentity;
 import org.apache.doris.catalog.CatalogTestUtil;
 import org.apache.doris.catalog.Env;
@@ -32,6 +33,7 @@ import org.apache.doris.common.Config;
 import org.apache.doris.common.DuplicatedRequestException;
 import org.apache.doris.common.FeMetaVersion;
 import org.apache.doris.common.LabelAlreadyUsedException;
+import org.apache.doris.common.LoadException;
 import org.apache.doris.common.MetaNotFoundException;
 import org.apache.doris.common.QuotaExceedException;
 import org.apache.doris.common.UserException;
@@ -1254,5 +1256,40 @@ public class GlobalTransactionMgrTest {
         Assertions.assertEquals(version, replica.getVersion());
         Assertions.assertEquals(lastSuccessVersion, replica.getLastSuccessVersion());
         Assertions.assertEquals(lastFailedVersion, replica.getLastFailedVersion());
+    }
+
+    @Test
+    public void testCommitRefusedByRebucketFence() throws UserException {
+        FakeEnv.setEnv(masterEnv);
+        Table testTable1 = masterEnv.getInternalCatalog().getDbOrMetaException(CatalogTestUtil.testDbId1)
+                .getTableOrMetaException(CatalogTestUtil.testTableId1);
+        OlapTable olapTable = (OlapTable) testTable1;
+        Partition partition = olapTable.getPartition(CatalogTestUtil.testPartitionId1);
+        // txn A began before the fence
+        long txnA = masterTransMgr.beginTransaction(CatalogTestUtil.testDbId1,
+                Lists.newArrayList(CatalogTestUtil.testTableId1), CatalogTestUtil.testTxnLabel1, transactionSource,
+                LoadJobSourceType.FRONTEND, Config.stream_load_default_timeout_second);
+        masterEnv.getRebucketFenceRegistry().fence(olapTable, partition, 1L, txnA);
+        Assertions.assertEquals(Partition.PartitionState.REBUCKET_FENCED, partition.getState());
+        // txn B began after it: refused at commit with the retriable marker
+        long txnB = masterTransMgr.beginTransaction(CatalogTestUtil.testDbId1,
+                Lists.newArrayList(CatalogTestUtil.testTableId1), CatalogTestUtil.testTxnLabel2, transactionSource,
+                LoadJobSourceType.FRONTEND, Config.stream_load_default_timeout_second);
+        List<TabletCommitInfo> transTablets = generateTabletCommitInfos(CatalogTestUtil.testTabletId1, allBackends);
+        LoadException e = Assertions.assertThrows(LoadException.class, () -> masterTransMgr.commitTransactionWithoutLock(
+                CatalogTestUtil.testDbId1, Lists.newArrayList(testTable1), txnB, transTablets, null));
+        Assertions.assertTrue(e.getMessage().contains(RebucketFenceRegistry.FENCED_MARKER), e.getMessage());
+        // txn A, the in-flight one, still commits
+        masterTransMgr.commitTransactionWithoutLock(
+                CatalogTestUtil.testDbId1, Lists.newArrayList(testTable1), txnA, transTablets, null);
+        Assertions.assertEquals(TransactionStatus.COMMITTED,
+                fakeEditLog.getTransaction(txnA).getTransactionStatus());
+        // fence down: B commits
+        masterEnv.getRebucketFenceRegistry().unfence(olapTable, partition);
+        Assertions.assertEquals(Partition.PartitionState.NORMAL, partition.getState());
+        masterTransMgr.commitTransactionWithoutLock(
+                CatalogTestUtil.testDbId1, Lists.newArrayList(testTable1), txnB, transTablets, null);
+        Assertions.assertEquals(TransactionStatus.COMMITTED,
+                fakeEditLog.getTransaction(txnB).getTransactionStatus());
     }
 }
