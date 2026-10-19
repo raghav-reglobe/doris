@@ -102,6 +102,7 @@ import org.apache.doris.common.lock.MonitoredReentrantLock;
 import org.apache.doris.common.util.BufferSizeUtil;
 import org.apache.doris.common.util.DbUtil;
 import org.apache.doris.common.util.DebugPointUtil;
+import org.apache.doris.common.util.AutoBucketCalculator;
 import org.apache.doris.common.util.DynamicPartitionUtil;
 import org.apache.doris.common.util.MetaLockUtils;
 import org.apache.doris.common.util.PropertyAnalyzer;
@@ -1707,6 +1708,13 @@ public class InternalCatalog implements CatalogIf<Database> {
                                         + "please review your schema design or modify the FE config "
                                         + "'max_bucket_num_per_partition' to adjust this limit.",
                                 randomDistributionInfo.getBucketNum(), Config.max_bucket_num_per_partition));
+                    }
+                }
+                if (distributionDesc.isAutoBucket()) {
+                    // BUCKETS AUTO on an added partition: size it from the partitions that already hold data
+                    int autoBuckets = AutoBucketCalculator.calculateForExistingPartitions(olapTable, partitionName);
+                    if (autoBuckets > 0) {
+                        distributionInfo.setBucketNum(autoBuckets);
                     }
                 }
             } else {
