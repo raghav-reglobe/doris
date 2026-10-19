@@ -111,4 +111,34 @@ public class RebucketJobTest extends TestWithFeService {
         Assertions.assertFalse(registry.isFenced(p.getId()));
         Assertions.assertEquals(before, table.getPartition("t").getDistributionInfo().getBucketNum());
     }
+
+    @Test
+    public void testOneJobPerTableAndTheCancelStatementReachesIt() throws Exception {
+        Database db = Env.getCurrentInternalCatalog().getDbOrDdlException("rb");
+        OlapTable table = (OlapTable) db.getTableOrDdlException("t");
+        Partition p = table.getPartition("t");
+        int before = p.getDistributionInfo().getBucketNum();
+        RebucketFenceRegistry registry = Env.getCurrentEnv().getRebucketFenceRegistry();
+        FillLessJob job = new FillLessJob(db.getId(), table, before + 2);
+        Env.getCurrentEnv().getSchemaChangeHandler().addAlterJobV2(job);
+        job.run();
+        Assertions.assertEquals(JobState.WAITING_TXN, job.getJobState(), job.errMsg);
+        Assertions.assertSame(job, RebucketJob.unfinishedJobOf(table.getId()));
+        // the table stays NORMAL, yet a second job and any other ALTER are refused while this one runs
+        Assertions.assertEquals(OlapTable.OlapTableState.NORMAL, table.getState());
+        Exception second = Assertions.assertThrows(Exception.class,
+                () -> RebucketJob.submit(db, table, Lists.newArrayList("t"), 3, null, "test"));
+        Assertions.assertTrue(second.getMessage().contains("unfinished REBUCKET job"), second.getMessage());
+        Exception other = Assertions.assertThrows(Exception.class,
+                () -> alterTableSync("ALTER TABLE rb.t ADD COLUMN c INT"));
+        Assertions.assertTrue(other.getMessage().contains("unfinished REBUCKET job"), other.getMessage());
+        // the statement path cancels it although the table is not under SCHEMA_CHANGE
+        String temp = job.getTempPartitionName();
+        executeNereidsSql("CANCEL ALTER TABLE COLUMN FROM rb.t");
+        Assertions.assertEquals(JobState.CANCELLED, job.getJobState());
+        Assertions.assertNull(table.getPartition(temp, true));
+        Assertions.assertFalse(registry.isFenced(p.getId()));
+        Assertions.assertNull(RebucketJob.unfinishedJobOf(table.getId()));
+        Assertions.assertEquals(before, table.getPartition("t").getDistributionInfo().getBucketNum());
+    }
 }

@@ -3191,19 +3191,25 @@ public class SchemaChangeHandler extends AlterHandler {
         OlapTable olapTable = db.getOlapTableOrDdlException(tableName);
         olapTable.writeLockOrDdlException();
         try {
-            if (olapTable.getState() != OlapTableState.SCHEMA_CHANGE
-                    && olapTable.getState() != OlapTableState.WAITING_STABLE) {
-                throw new DdlException("Table[" + tableName + "] is not under SCHEMA_CHANGE.");
-            }
+            // a re-bucket job leaves the table NORMAL; it is found by its handler entry
+            RebucketJob rebucketJob = RebucketJob.unfinishedJobOf(olapTable.getId());
+            if (rebucketJob != null) {
+                schemaChangeJobV2 = rebucketJob;
+            } else {
+                if (olapTable.getState() != OlapTableState.SCHEMA_CHANGE
+                        && olapTable.getState() != OlapTableState.WAITING_STABLE) {
+                    throw new DdlException("Table[" + tableName + "] is not under SCHEMA_CHANGE.");
+                }
 
-            // find from new alter jobs first
-            List<AlterJobV2> schemaChangeJobV2List = getUnfinishedAlterJobV2ByTableId(olapTable.getId());
-            // current schemaChangeJob job doesn't support batch operation,so just need to get one job
-            schemaChangeJobV2 = schemaChangeJobV2List.size() == 0 ? null
-                    : Iterables.getOnlyElement(schemaChangeJobV2List);
-            if (schemaChangeJobV2 == null) {
-                throw new DdlException(
-                    "Table[" + tableName + "] is under schema change state" + " but could not find related job");
+                // find from new alter jobs first
+                List<AlterJobV2> schemaChangeJobV2List = getUnfinishedAlterJobV2ByTableId(olapTable.getId());
+                // current schemaChangeJob job doesn't support batch operation,so just need to get one job
+                schemaChangeJobV2 = schemaChangeJobV2List.size() == 0 ? null
+                        : Iterables.getOnlyElement(schemaChangeJobV2List);
+                if (schemaChangeJobV2 == null) {
+                    throw new DdlException("Table[" + tableName + "] is under schema change state"
+                            + " but could not find related job");
+                }
             }
         } finally {
             olapTable.writeUnlock();

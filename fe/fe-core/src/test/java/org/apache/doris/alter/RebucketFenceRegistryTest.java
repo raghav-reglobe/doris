@@ -43,12 +43,13 @@ public class RebucketFenceRegistryTest {
         Assertions.assertTrue(registry.isFenced(10L));
         Mockito.verify(partition).setState(PartitionState.REBUCKET_FENCED);
 
-        // began before or at the watershed: the in-flight set the job drains
+        // began before the watershed: the in-flight set the job drains
         registry.checkCommit(table, partition, 99L);
-        registry.checkCommit(table, partition, 100L);
-        // began after the fence: refused, retriable, marked
+        // at or after the watershed (a fresh id locally; in cloud mode the meta-service's current
+        // maximum, which its drain does not cover): refused, retriable, marked
         LoadException e = Assertions.assertThrows(LoadException.class,
-                () -> registry.checkCommit(table, partition, 101L));
+                () -> registry.checkCommit(table, partition, 100L));
+        Assertions.assertThrows(LoadException.class, () -> registry.checkCommit(table, partition, 101L));
         Assertions.assertTrue(e.getMessage().contains(RebucketFenceRegistry.FENCED_MARKER), e.getMessage());
         Assertions.assertTrue(e.getMessage().contains("job 7"), e.getMessage());
 

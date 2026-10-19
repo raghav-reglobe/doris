@@ -1269,7 +1269,9 @@ public class GlobalTransactionMgrTest {
         long txnA = masterTransMgr.beginTransaction(CatalogTestUtil.testDbId1,
                 Lists.newArrayList(CatalogTestUtil.testTableId1), CatalogTestUtil.testTxnLabel1, transactionSource,
                 LoadJobSourceType.FRONTEND, Config.stream_load_default_timeout_second);
-        masterEnv.getRebucketFenceRegistry().fence(olapTable, partition, 1L, txnA);
+        // the watershed is a fresh id from the manager, taken as the schema-change job takes its own
+        long watershed = masterTransMgr.getNextTransactionId();
+        masterEnv.getRebucketFenceRegistry().fence(olapTable, partition, 1L, watershed);
         Assertions.assertEquals(Partition.PartitionState.REBUCKET_FENCED, partition.getState());
         // txn B began after it: refused at commit with the retriable marker
         long txnB = masterTransMgr.beginTransaction(CatalogTestUtil.testDbId1,
