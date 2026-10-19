@@ -176,6 +176,7 @@ public class ModifyTablePropertiesOp extends AlterTableOp {
                 throw new AnalysisException("Property " + PropertyAnalyzer.PROPERTIES_AUTO_REBUCKET
                         + " must be true or false");
             }
+            this.opType = AlterOpType.MODIFY_TABLE_PROPERTY_SYNC;
         } else if (TableProperty.isSamePrefixProperties(properties, PropertyAnalyzer.PROPERTIES_BINLOG_PREFIX)) {
             // validate binlog.* properties
             PropertyAnalyzer.analyzeBinlogConfig(new java.util.HashMap<>(properties));
