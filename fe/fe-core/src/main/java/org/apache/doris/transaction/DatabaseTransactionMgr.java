@@ -548,6 +548,7 @@ public class DatabaseTransactionMgr {
                 throw new LoadException("Table [" + tbl.getName() + "], Partition ["
                         + tbl.getPartition(partitionId).getName() + "] is in restore process. Can not load into it");
             }
+            env.getRebucketFenceRegistry().checkCommit(tbl, tbl.getPartition(partitionId), transactionId);
 
             // only do check when here's restore on this table now
             if (tbl.getState() == OlapTableState.RESTORE) {

@@ -57,7 +57,9 @@ public class Partition extends MetaObject {
         ROLLUP,
         @Deprecated
         SCHEMA_CHANGE,
-        RESTORE
+        RESTORE,
+        // a re-bucket job holds the write fence on this partition (RebucketFenceRegistry)
+        REBUCKET_FENCED
     }
 
     @SerializedName(value = "id")
