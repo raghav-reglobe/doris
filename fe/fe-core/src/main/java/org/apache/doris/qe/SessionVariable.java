@@ -3065,8 +3065,7 @@ public class SessionVariable implements Serializable, Writable {
                     checker = "checkSkewRewriteAggBucketNum")
     public int skewRewriteAggBucketNum = 1024;
 
-    @VarAttrDef.VarAttr(name = AGG_SHUFFLE_USE_PARENT_KEY,
-            needForward = true, description = "Whether to use the parent node's grouping "
+    @VarAttrDef.VarAttr(name = AGG_SHUFFLE_USE_PARENT_KEY, description = "Whether to use the parent node's grouping "
             + "key for shuffling during the aggregation operator", needForward = false)
     public boolean aggShuffleUseParentKey = true;
 

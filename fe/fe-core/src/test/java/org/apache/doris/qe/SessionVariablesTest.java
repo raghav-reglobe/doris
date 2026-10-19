@@ -503,8 +503,7 @@ public class SessionVariablesTest extends TestWithFeService {
         // session-level SET is silently lost on the follower path and the master may
         // run a different plan than the same statement run on the master directly.
         String[] knobs = {
-                SessionVariable.AGG_PHASE, SessionVariable.AGG_SHUFFLE_USE_PARENT_KEY,
-                SessionVariable.BROADCAST_RIGHT_TABLE_SCALE_FACTOR, SessionVariable.CTE_INLINE_MODE,
+                SessionVariable.AGG_PHASE, SessionVariable.BROADCAST_RIGHT_TABLE_SCALE_FACTOR, SessionVariable.CTE_INLINE_MODE,
                 SessionVariable.DISABLE_COLOCATE_PLAN, SessionVariable.DISABLE_JOIN_REORDER,
                 SessionVariable.DISABLE_STREAMING_PREAGGREGATIONS, SessionVariable.DPHYPER_LIMIT,
                 SessionVariable.ENABLE_BROADCAST_JOIN_FORCE_PASSTHROUGH,
