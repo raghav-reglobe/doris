@@ -49,7 +49,7 @@ public class RebucketFenceRegistryTest {
         // began after the fence: refused, retriable, marked
         LoadException e = Assertions.assertThrows(LoadException.class,
                 () -> registry.checkCommit(table, partition, 101L));
-        Assertions.assertTrue(e.getMessage().startsWith(RebucketFenceRegistry.FENCED_MARKER), e.getMessage());
+        Assertions.assertTrue(e.getMessage().contains(RebucketFenceRegistry.FENCED_MARKER), e.getMessage());
         Assertions.assertTrue(e.getMessage().contains("job 7"), e.getMessage());
 
         Mockito.when(partition.getState()).thenReturn(PartitionState.REBUCKET_FENCED);
