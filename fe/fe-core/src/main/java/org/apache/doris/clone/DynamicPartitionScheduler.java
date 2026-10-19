@@ -457,17 +457,20 @@ public class DynamicPartitionScheduler extends MasterDaemon {
                         Config.autobucket_out_of_bounds_percent_threshold);
                 return currentPartitionNumBuckets;
             }
-            // currentPartitionNumBuckets not too small.
-            // If it is too small, the program will intervene. use previousPartitionNumBuckets
-            if (currentPartitionNumBuckets
-                    < previousPartitionNumBuckets * (1 - Config.autobucket_out_of_bounds_percent_threshold)) {
+            // currentPartitionNumBuckets not too small. If it is, step down to the lower bound instead of
+            // repeating previousPartitionNumBuckets: a count that is only ever allowed to grow can never
+            // recover from the default or from an over-estimate, and the next partition is bounded against
+            // this one again, so a table converges on the calculated count over a few partitions.
+            int lowerBoundNumBuckets = (int) Math.ceil(
+                    previousPartitionNumBuckets * (1 - Config.autobucket_out_of_bounds_percent_threshold));
+            if (currentPartitionNumBuckets < lowerBoundNumBuckets) {
                 LOG.warn("tabletName {}, partitionName {} auto bucket calc num may be err, "
                         + "smaller than previous too much, plz check. "
-                        + "calc bucket num {}, previous partition bucket num {}, percent {}",
+                        + "calc bucket num {}, previous partition bucket num {}, percent {}, use {}",
                         tableName, partitionName,
                         currentPartitionNumBuckets, previousPartitionNumBuckets,
-                        Config.autobucket_out_of_bounds_percent_threshold);
-                return previousPartitionNumBuckets;
+                        Config.autobucket_out_of_bounds_percent_threshold, lowerBoundNumBuckets);
+                return lowerBoundNumBuckets;
             }
         }
         LOG.info("previousPartitionBucketsNum eq 0, check before log");
