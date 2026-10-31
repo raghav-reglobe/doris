@@ -562,6 +562,10 @@ public abstract class ConnectProcessor {
         }
         Set<String> roles = request.isSetCurrentRoles() ? request.getCurrentRoles() : Collections.emptySet();
         ctx.setSessionRoleOverride(roles);
+        if (request.isSetAuthenticatedUserIdent()) {
+            // audit only: the master's row names the account that authenticated the connection
+            ctx.setAuthenticatedIdentity(UserIdentity.fromThrift(request.getAuthenticatedUserIdent()));
+        }
     }
 
     public TMasterOpResult proxyExecute(TMasterOpRequest request) throws TException {

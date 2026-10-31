@@ -84,13 +84,17 @@ public class ForwardedSessionNarrowingTest extends TestWithFeService {
         TMasterOpRequest plain = forwardRequestOf(ctx);
         Assertions.assertFalse(plain.isSetIsSuUser());
         Assertions.assertFalse(plain.isSetCurrentRoles());
+        Assertions.assertFalse(plain.isSetAuthenticatedUserIdent());
 
+        ctx.setAuthenticatedIdentity(ident("svc"));
         ctx.setSessionRoleOverride(Sets.newHashSet("tenant_a", "tenant_a_scoped"));
         TMasterOpRequest narrowed = forwardRequestOf(ctx);
         Assertions.assertTrue(narrowed.isSetIsSuUser() && narrowed.isIsSuUser());
         Assertions.assertEquals(Sets.newHashSet("tenant_a", "tenant_a_scoped"), narrowed.getCurrentRoles());
-        // the identity the master rebuilds is still the session's (switched-to) identity
+        // the identity the master rebuilds is still the session's (switched-to) identity ...
         Assertions.assertEquals(ctx.getQualifiedUser(), narrowed.getUser());
+        // ... and the account that authenticated the connection rides along for the master's audit row
+        Assertions.assertEquals(ident("svc").toThrift(), narrowed.getAuthenticatedUserIdent());
     }
 
     @Test
@@ -106,11 +110,15 @@ public class ForwardedSessionNarrowingTest extends TestWithFeService {
         TMasterOpRequest request = new TMasterOpRequest();
         request.setIsSuUser(true);
         request.setCurrentRoles(Sets.newHashSet("tenant_b"));
+        request.setAuthenticatedUserIdent(ident("svc").toThrift());
 
         ConnectContext proxy = new ConnectContext();
         proxy.setCurrentUserIdentity(bob);
         ConnectProcessor.applyForwardedSessionNarrowing(proxy, request);
         Assertions.assertEquals(Collections.singleton("tenant_b"), proxy.getSessionRoleOverride());
+        // the master's audit row names the switcher, the effective identity stays the target
+        Assertions.assertEquals("svc", proxy.getAuthenticatedIdentity().getQualifiedUser());
+        Assertions.assertEquals("bob", proxy.getCurrentUserIdentity().getQualifiedUser());
 
         proxy.setThreadLocalInfo();
         try {
@@ -138,6 +146,7 @@ public class ForwardedSessionNarrowingTest extends TestWithFeService {
         ConnectContext proxy = new ConnectContext();
         ConnectProcessor.applyForwardedSessionNarrowing(proxy, new TMasterOpRequest());
         Assertions.assertNull(proxy.getSessionRoleOverride());
+        Assertions.assertNull(proxy.getAuthenticatedIdentity());
 
         // a role list without the switched flag is not a narrowing
         TMasterOpRequest rolesOnly = new TMasterOpRequest();

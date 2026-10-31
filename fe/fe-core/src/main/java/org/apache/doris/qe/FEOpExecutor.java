@@ -201,6 +201,10 @@ public class FEOpExecutor {
             // the forwarded statement against exactly this set, never the target's full role union.
             params.setIsSuUser(true);
             params.setCurrentRoles(new HashSet<>(sessionRoleOverride));
+            if (ctx.getAuthenticatedIdentity() != null) {
+                // the master's audit row names the account that authenticated the connection
+                params.setAuthenticatedUserIdent(ctx.getAuthenticatedIdentity().toThrift());
+            }
         }
         params.setSessionId(ctx.getSessionId());
         params.setMoreResultExists(moreStmtExists);
