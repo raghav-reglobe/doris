@@ -299,6 +299,37 @@ public class SuUserNarrowingTest extends TestWithFeService {
     // apply the calling session's narrowed role subset there, so information_schema name visibility
     // matches the session instead of resolving the target's FULL roles (the pre-fix leak).
     @Test
+    public void testOmittedWorkloadGroupClauseClearsSwitchersLane() throws Exception {
+        addUser("lane_svc", true);
+        addUser("lane_person", true);
+        createRole("lane_role");
+        grantRole("GRANT 'lane_role' TO 'lane_person'@'%'");
+        grantPriv("GRANT PROXY_PRIV ON *.*.* TO 'lane_svc'@'%';");
+
+        ConnectContext ctx = new ConnectContext();
+        ctx.setCurrentUserIdentity(ident("lane_svc"));
+        // the switcher's own session runs in a lane of its own
+        ctx.getSessionVariable().setWorkloadGroup("wg_switcher_lane");
+        ctx.setThreadLocalInfo();
+        try {
+            new SuUserCommand(new UserIdentity("lane_person", "%"),
+                    Collections.singletonList("lane_role"), null).run(ctx, null);
+            // no WORKLOAD GROUP clause: the switcher's lane is dropped, so the per-query
+            // resolution falls through to the target's default_workload_group
+            Assertions.assertEquals("", ctx.getSessionVariable().getWorkloadGroup());
+
+            ctx.revertSessionNarrowing();
+            ctx.getSessionVariable().setWorkloadGroup("wg_switcher_lane");
+            new SuUserCommand(new UserIdentity("lane_person", "%"),
+                    Collections.singletonList("lane_role"), "wg_named").run(ctx, null);
+            // an explicit clause places the session exactly there
+            Assertions.assertEquals("wg_named", ctx.getSessionVariable().getWorkloadGroup());
+        } finally {
+            connectContext.setThreadLocalInfo();
+        }
+    }
+
+    @Test
     public void testRpcSessionNarrowingAppliesOnMetadataRpcThread() throws Exception {
         addUser("rpcuser", true);
         createRole("rpc_space");
