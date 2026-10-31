@@ -50,7 +50,6 @@ import org.apache.doris.resource.BackendSelection;
 import org.apache.doris.resource.workloadgroup.QueueToken;
 import org.apache.doris.service.FrontendOptions;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
@@ -225,8 +224,7 @@ public class AuditLogHelper {
      * The account that authenticated the connection: the switcher of a session-narrowed (SU) session,
      * otherwise the session user itself. Never null, so the audit row always names who logged in.
      */
-    @VisibleForTesting
-    static String authenticatedUser(ConnectContext ctx) {
+    public static String authenticatedUser(ConnectContext ctx) {
         String user = ctx.getAuthenticatedIdentity() == null
                 ? ctx.getQualifiedUser() : ctx.getAuthenticatedIdentity().getQualifiedUser();
         return user == null ? "" : user;

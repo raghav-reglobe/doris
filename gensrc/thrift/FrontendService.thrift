@@ -438,6 +438,8 @@ struct TMasterOpRequest {
     34: optional set<string> current_roles
     35: optional bool is_su_user
     36: optional string connectingFeLocalResourceGroup
+    // SU: the account that authenticated the connection, so the master's audit row names it too
+    37: optional Types.TUserIdentity authenticated_user_ident
 
     // selectdb cloud
     1000: optional string cloud_cluster
