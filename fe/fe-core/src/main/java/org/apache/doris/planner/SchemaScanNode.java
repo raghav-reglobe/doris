@@ -97,12 +97,43 @@ public class SchemaScanNode extends ScanNode {
     public void finalizeForNereids() throws UserException {
         if (ConnectContext.get().getSessionVariable().enableSchemaScanFromMasterFe
                 && tableName.equalsIgnoreCase("tables")) {
+            if (ConnectContext.get().isSessionRoleNarrowed() && !Env.getCurrentEnv().masterRunsSameBuild()) {
+                throw new UserException(mixedBuildMessage("the master FE"));
+            }
             frontendIP = Env.getCurrentEnv().getMasterHost();
             frontendPort = Env.getCurrentEnv().getMasterRpcPort();
         } else {
             frontendIP = FrontendOptions.getLocalHostAddress();
             frontendPort = Config.rpc_port;
         }
+        TableIf tableIf = desc.getTable();
+        if (ConnectContext.get().isSessionRoleNarrowed() && tableIf instanceof SchemaTable
+                && ((SchemaTable) tableIf).shouldFetchAllFe() && !allAliveFrontendsRunSameBuild()) {
+            throw new UserException(mixedBuildMessage("every alive FE"));
+        }
+    }
+
+    /**
+     * A session-narrowed (SU) session's role subset rides in the BE's metadata RPCs to the FE
+     * (TGetTablesParams.current_roles and friends). An FE of an older build silently ignores the
+     * field and authorizes against the target's FULL role union, so a scan whose RPCs leave this
+     * FE (the master, or every alive FE) fails closed while the FE set runs mixed builds, exactly
+     * as a forwarded statement does (Env.masterRunsSameBuild).
+     */
+    private static String mixedBuildMessage(String target) {
+        return "This information_schema scan of a session-narrowed (SU) session is answered by " + target
+                + ", which runs a different FE build than this FE and could not apply the narrowing. "
+                + "Retry once the rolling upgrade completes.";
+    }
+
+    private static boolean allAliveFrontendsRunSameBuild() {
+        String local = Frontend.localBuildVersion();
+        for (Frontend fe : Env.getCurrentEnv().getFrontends(null)) {
+            if (fe.isAlive() && !local.equals(fe.getVersion())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void setFeAddrList(TPlanNode msg) {
