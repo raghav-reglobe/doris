@@ -378,16 +378,21 @@ public class Auth implements Writable {
      * current session. Used for the SU ceiling check and for existence probing.
      */
     public Set<String> getGrantedRoleNames(UserIdentity userIdentity) {
-        Set<String> names = Sets.newHashSet(userRoleManager.getRolesByUser(userIdentity));
-        if (isLdapAuthEnabled()) {
-            Set<Role> ldapRoles = ldapManager.getUserRoles(userIdentity.getQualifiedUser());
-            if (!CollectionUtils.isEmpty(ldapRoles)) {
-                for (Role r : ldapRoles) {
-                    names.add(r.getRoleName());
+        readLock();
+        try {
+            Set<String> names = Sets.newHashSet(userRoleManager.getRolesByUser(userIdentity));
+            if (isLdapAuthEnabled()) {
+                Set<Role> ldapRoles = ldapManager.getUserRoles(userIdentity.getQualifiedUser());
+                if (!CollectionUtils.isEmpty(ldapRoles)) {
+                    for (Role r : ldapRoles) {
+                        names.add(r.getRoleName());
+                    }
                 }
             }
+            return names;
+        } finally {
+            readUnlock();
         }
-        return names;
     }
 
     // The implicit information_schema/mysql read grants that RoleManager.createDefaultRole gives
@@ -423,19 +428,19 @@ public class Auth implements Writable {
     }
 
     /**
-     * The role set consulted for WORKLOAD GROUP privilege checks. Identical to
-     * {@link #getRolesByUserWithLdap} for a normal session. In an SU-narrowed session the
-     * narrowed set is widened with the effective identity's own granted roles (its default
-     * role (where direct grants live) plus explicit and LDAP roles), so the narrowed session
-     * may use exactly the workload groups
-     * the person's own session could use. A workload group is placement, not data authority:
-     * the narrowed session runs in the target's default_workload_group (the same resolution as
-     * the person's own session), and the person's USAGE on it is typically a direct grant that
-     * narrowing would otherwise drop. Only the workload-group predicate reads this set;
-     * table, database, resource and cloud checks stay on the narrowed set, so data access
-     * cannot widen through it.
+     * The role set consulted for PLACEMENT privilege checks: WORKLOAD GROUP usage and, in cloud
+     * mode, compute-group (CLUSTER) usage. Identical to {@link #getRolesByUserWithLdap} for a
+     * normal session. In an SU-narrowed session the narrowed set is widened with the effective
+     * identity's own granted roles (its default role (where direct grants live) plus explicit
+     * and LDAP roles), so the narrowed session may use exactly the workload groups and compute
+     * groups the person's own session could use. Placement is not data authority: the narrowed
+     * session runs in the target's default workload group and compute group (the same
+     * resolution as the person's own session), and the person's USAGE on them is typically a
+     * direct grant that narrowing would otherwise drop. Only the two placement predicates (and
+     * the SHOW output that enumerates them) read this set; table, database, resource, stage and
+     * storage-vault checks stay on the narrowed set, so data access cannot widen through it.
      */
-    private Set<Role> getRolesForWorkloadGroupCheck(UserIdentity userIdentity) {
+    private Set<Role> getRolesForPlacementCheck(UserIdentity userIdentity) {
         Set<Role> roles = getRolesByUserWithLdap(userIdentity);
         ConnectContext ctx = ConnectContext.get();
         if (ctx == null || !ctx.isSessionRoleNarrowed()
@@ -736,7 +741,7 @@ public class Auth implements Writable {
                 return true;
             }
 
-            Set<Role> roles = getRolesForWorkloadGroupCheck(currentUser);
+            Set<Role> roles = getRolesForPlacementCheck(currentUser);
             PrivBitSet savedPrivs = PrivBitSet.of();
             for (Role role : roles) {
                 if (role.checkWorkloadGroupPriv(workloadGroupName, wanted, savedPrivs)) {
@@ -760,7 +765,10 @@ public class Auth implements Writable {
                     return true;
                 }
             }
-            Set<Role> roles = getRolesByUserWithLdap(currentUser);
+            // compute-group USAGE is placement (see getRolesForPlacementCheck); stage and
+            // storage-vault usage are data access and stay on the narrowed set
+            Set<Role> roles = type == ResourceTypeEnum.CLUSTER
+                    ? getRolesForPlacementCheck(currentUser) : getRolesByUserWithLdap(currentUser);
             PrivBitSet savedPrivs = PrivBitSet.of();
             for (Role role : roles) {
                 if (role.checkCloudPriv(cloudName, wanted, type, savedPrivs)) {
@@ -1909,8 +1917,14 @@ public class Auth implements Writable {
 
             Set<String> currentUserRole = null;
             if (!isCurrentUserAdmin) {
-                currentUserRole = userRoleManager.getRolesByUser(currentUserIdentity, false);
-                currentUserRole = currentUserRole == null ? new HashSet<>() : currentUserRole;
+                // the same role set the USAGE check consults: an SU-narrowed session lists the
+                // placement set, not the identity's full role union
+                currentUserRole = new HashSet<>();
+                for (Role role : getRolesForPlacementCheck(currentUserIdentity)) {
+                    if (!role.getRoleName().startsWith(RoleManager.DEFAULT_ROLE_PREFIX)) {
+                        currentUserRole.add(role.getRoleName());
+                    }
+                }
             }
             roleManager.getRoleWorkloadGroupPrivs(result, currentUserRole);
         } finally {
@@ -1920,18 +1934,18 @@ public class Auth implements Writable {
 
     private ResourcePrivTable getUserCloudClusterPrivTable(UserIdentity userIdentity) {
         ResourcePrivTable table = new ResourcePrivTable();
-        Set<String> roles = userRoleManager.getRolesByUser(userIdentity);
-        for (String roleName : roles) {
-            table.merge(roleManager.getRole(roleName).getCloudClusterPrivTable());
+        // the same role set checkCloudPriv consults for compute groups (placement)
+        for (Role role : getRolesForPlacementCheck(userIdentity)) {
+            table.merge(role.getCloudClusterPrivTable());
         }
         return table;
     }
 
     private ResourcePrivTable getUserCloudStagePrivTable(UserIdentity userIdentity) {
         ResourcePrivTable table = new ResourcePrivTable();
-        Set<String> roles = userRoleManager.getRolesByUser(userIdentity);
-        for (String roleName : roles) {
-            table.merge(roleManager.getRole(roleName).getCloudStagePrivTable());
+        // stage usage is data access: the narrowed set, like checkCloudPriv
+        for (Role role : getRolesByUserWithLdap(userIdentity)) {
+            table.merge(role.getCloudStagePrivTable());
         }
         return table;
     }

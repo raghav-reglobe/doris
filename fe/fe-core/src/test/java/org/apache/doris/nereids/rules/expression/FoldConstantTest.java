@@ -94,6 +94,7 @@ import org.apache.doris.nereids.trees.expressions.functions.scalar.Round;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.Sec;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.SecondMicrosecondAdd;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.SecondsAdd;
+import org.apache.doris.nereids.trees.expressions.functions.scalar.SessionIsNarrowed;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.ShortCircuitIf;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.Sign;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.Sin;
@@ -152,9 +153,11 @@ import org.apache.commons.lang3.StringUtils;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.List;
 
 class FoldConstantTest extends ExpressionRewriteTestHelper {
@@ -1905,5 +1908,26 @@ class FoldConstantTest extends ExpressionRewriteTestHelper {
         AnalysisException exception = Assertions.assertThrows(AnalysisException.class,
                 () -> new ExpressionNormalization().rewrite(analyzed, context));
         Assertions.assertEquals(expectedMessage, exception.getMessage());
+    }
+
+    @Test
+    public void testSessionIsNarrowedFoldsOnlyWithSessionContext() throws Exception {
+        SessionIsNarrowed fn = new SessionIsNarrowed();
+        // the context-free fold (expressions that must not depend on the session) leaves it alone,
+        // like current_user()
+        Field contextFreeField = FoldConstantRuleOnFE.class.getDeclaredField("CONTEXT_FREE_VISITOR_INSTANCE");
+        contextFreeField.setAccessible(true);
+        FoldConstantRuleOnFE contextFree = (FoldConstantRuleOnFE) contextFreeField.get(null);
+        Assertions.assertSame(fn, contextFree.rewrite(fn, context));
+        // the session-aware fold answers from the connection's SU state
+        Assertions.assertEquals(BooleanLiteral.FALSE,
+                FoldConstantRuleOnFE.VISITOR_INSTANCE.rewrite(fn, context));
+        cascadesContext.getConnectContext().setSessionRoleOverride(Collections.singleton("tenant"));
+        try {
+            Assertions.assertEquals(BooleanLiteral.TRUE,
+                    FoldConstantRuleOnFE.VISITOR_INSTANCE.rewrite(fn, context));
+        } finally {
+            cascadesContext.getConnectContext().setSessionRoleOverride(null);
+        }
     }
 }

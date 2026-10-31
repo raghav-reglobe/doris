@@ -58,6 +58,14 @@ suite("test_su_session_narrowing", "p0,auth") {
     // the framework connects with the default database in the URL, which needs a privilege on it
     sql """GRANT SELECT_PRIV ON ${context.config.defaultDb}.* TO '${svc}'@'%'"""
     sql """GRANT SELECT_PRIV ON ${context.config.defaultDb}.* TO '${person}'@'%'"""
+    if (isCloudMode()) {
+        // compute-group USAGE is placement: the narrowed session runs in the person's lane
+        def clusters = sql """SHOW CLUSTERS"""
+        assertTrue(!clusters.isEmpty())
+        def validCluster = clusters[0][0]
+        sql """GRANT USAGE_PRIV ON CLUSTER `${validCluster}` TO '${person}'@'%'"""
+        sql """GRANT USAGE_PRIV ON CLUSTER `${validCluster}` TO '${svc}'@'%'"""
+    }
 
     try {
         // PROXY_PRIV is a global privilege, listed like any other

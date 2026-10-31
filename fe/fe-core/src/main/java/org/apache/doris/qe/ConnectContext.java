@@ -377,6 +377,11 @@ public class ConnectContext {
             cleanupTemporaryTables(true);
             dbToTempTableNamesMap.clear();
         }
+        // A narrowed session reverts to the AUTHENTICATED identity on connection reset —
+        // dropping only the override would widen the session to the target's full roles.
+        // It reverts BEFORE the session variables are rebuilt, so the per-user defaults applied
+        // there are the authenticated account's, not the switched-to target's.
+        revertSessionNarrowing();
         resetSessionVariable();
         userVars = new HashMap<>();
         preparedStatementContextMap.clear();
@@ -386,9 +391,6 @@ public class ConnectContext {
         insertResult = null;
         command = MysqlCommand.COM_SLEEP;
         returnRows = 0;
-        // A narrowed session reverts to the AUTHENTICATED identity on connection reset —
-        // dropping only the override would widen the session to the target's full roles.
-        revertSessionNarrowing();
     }
 
     /** Revert an SU switch: back to the authenticated identity, override cleared. No-op if not switched. */
