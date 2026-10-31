@@ -1647,6 +1647,7 @@ struct TShowProcessListResult {
 
 struct TShowUserRequest {
     1: optional Types.TUserIdentity current_user_ident // to filter rows by the requesting user's privileges
+    2: optional set<string> current_roles // the requesting session's SU-narrowed role subset, if any
 }
 
 struct TShowUserResult {

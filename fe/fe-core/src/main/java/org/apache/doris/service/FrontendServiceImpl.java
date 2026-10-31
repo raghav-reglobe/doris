@@ -861,6 +861,12 @@ public class FrontendServiceImpl implements FrontendService.Iface {
     }
 
     public TListTableMetadataNameIdsResult listTableMetadataNameIds(TGetTablesParams params) throws TException {
+        return withSessionRoleOverride(params.current_user_ident, params.user, params.user_ip,
+                params.current_roles, () -> listTableMetadataNameIdsImpl(params));
+    }
+
+    private TListTableMetadataNameIdsResult listTableMetadataNameIdsImpl(TGetTablesParams params)
+            throws TException {
         if (LOG.isDebugEnabled()) {
             LOG.debug("get list simple table request: {}", params);
         }
@@ -944,6 +950,11 @@ public class FrontendServiceImpl implements FrontendService.Iface {
 
     @Override
     public TListPrivilegesResult listTablePrivilegeStatus(TGetTablesParams params) throws TException {
+        return withSessionRoleOverride(params.current_user_ident, params.user, params.user_ip,
+                params.current_roles, () -> listTablePrivilegeStatusImpl(params));
+    }
+
+    private TListPrivilegesResult listTablePrivilegeStatusImpl(TGetTablesParams params) throws TException {
         if (LOG.isDebugEnabled()) {
             LOG.debug("get list table privileges request: {}", params);
         }
@@ -963,6 +974,11 @@ public class FrontendServiceImpl implements FrontendService.Iface {
 
     @Override
     public TListPrivilegesResult listSchemaPrivilegeStatus(TGetTablesParams params) throws TException {
+        return withSessionRoleOverride(params.current_user_ident, params.user, params.user_ip,
+                params.current_roles, () -> listSchemaPrivilegeStatusImpl(params));
+    }
+
+    private TListPrivilegesResult listSchemaPrivilegeStatusImpl(TGetTablesParams params) throws TException {
         if (LOG.isDebugEnabled()) {
             LOG.debug("get list schema privileges request: {}", params);
         }
@@ -982,6 +998,11 @@ public class FrontendServiceImpl implements FrontendService.Iface {
 
     @Override
     public TListPrivilegesResult listUserPrivilegeStatus(TGetTablesParams params) throws TException {
+        return withSessionRoleOverride(params.current_user_ident, params.user, params.user_ip,
+                params.current_roles, () -> listUserPrivilegeStatusImpl(params));
+    }
+
+    private TListPrivilegesResult listUserPrivilegeStatusImpl(TGetTablesParams params) throws TException {
         if (LOG.isDebugEnabled()) {
             LOG.debug("get list user privileges request: {}", params);
         }
@@ -5857,7 +5878,12 @@ public class FrontendServiceImpl implements FrontendService.Iface {
     }
 
     @Override
-    public TShowUserResult showUser(TShowUserRequest request) {
+    public TShowUserResult showUser(TShowUserRequest request) throws TException {
+        return withSessionRoleOverride(request.current_user_ident, null, null, request.current_roles,
+                () -> showUserImpl(request));
+    }
+
+    private TShowUserResult showUserImpl(TShowUserRequest request) {
         UserIdentity currentUser = null;
         if (request.isSetCurrentUserIdent()) {
             currentUser = UserIdentity.fromThrift(request.current_user_ident);
