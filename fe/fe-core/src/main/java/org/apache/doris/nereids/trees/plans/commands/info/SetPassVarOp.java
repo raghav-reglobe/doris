@@ -82,7 +82,9 @@ public class SetPassVarOp extends SetVarOp {
         // account, because otherwise anyone who briefly holds a password
         // could park their own in the secondary slot as a persistent,
         // invisible credential.
-        if (isSelf && !retainCurrentPassword) {
+        // Nor through a session-narrowed (SU) session: the switcher is not the person, so a
+        // credential change needs the GRANT privilege of the narrowed set.
+        if (isSelf && !retainCurrentPassword && ctx.getAuthenticatedIdentity() == null) {
             return;
         }
 
