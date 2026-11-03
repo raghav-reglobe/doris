@@ -316,23 +316,6 @@ public class CreateRoutineLoadInfo {
             throws UserException {
         ConnectContext tmpCtx = new ConnectContext();
         tmpCtx.setCurrentUserIdentity(user);
-        checkWorkloadGroupAs(tmpCtx, workloadGroup, computeGroup);
-    }
-
-    /**
-     * The creation-time form: resolved under the live {@code session}, whose session-narrowed (SU)
-     * state ({@link ConnectContext#inheritIdentityFrom}) the lookup then honours, so a switcher who
-     * may not use the group cannot create a job that does.
-     */
-    public static void checkWorkloadGroup(ConnectContext session, String workloadGroup, String computeGroup)
-            throws UserException {
-        ConnectContext tmpCtx = new ConnectContext();
-        tmpCtx.inheritIdentityFrom(session);
-        checkWorkloadGroupAs(tmpCtx, workloadGroup, computeGroup);
-    }
-
-    private static void checkWorkloadGroupAs(ConnectContext tmpCtx, String workloadGroup, String computeGroup)
-            throws UserException {
         tmpCtx.getSessionVariable().setWorkloadGroup(workloadGroup);
         // a no-op outside cloud mode
         tmpCtx.setCloudCluster(computeGroup);
@@ -732,13 +715,14 @@ public class CreateRoutineLoadInfo {
             // cg_a was dropped, because this lookup resolved wg_a in cg_a.
             if (!isReplay) {
                 // Checked in the compute group the job will run in: the declared one, or else the session's,
-                // which the job snapshots when it is created. Resolved under the live session, so a
-                // session-narrowed (SU) session's narrowing follows into the lookup.
+                // which the job snapshots when it is created. An identity-only context: the lookup is
+                // placement, not data access, and a session-narrowed (SU) session may use every group the
+                // person's own session may use.
                 String computeGroup = this.computeGroupName;
                 if (Config.isCloudMode() && StringUtils.isEmpty(computeGroup)) {
                     computeGroup = ConnectContext.get().getCloudCluster();
                 }
-                checkWorkloadGroup(ConnectContext.get(), inputWorkloadGroupStr, computeGroup);
+                checkWorkloadGroup(ConnectContext.get().getCurrentUserIdentity(), inputWorkloadGroupStr, computeGroup);
             }
             this.workloadGroupName = inputWorkloadGroupStr;
         }
