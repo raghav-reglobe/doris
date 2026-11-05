@@ -56,11 +56,6 @@ public class RebucketOp extends AlterTableOp {
     }
 
     @Override
-    public boolean allowOpRowBinlog() {
-        return false;
-    }
-
-    @Override
     public String toSql() {
         StringBuilder sb = new StringBuilder("REBUCKET");
         if (partitionNames != null && !partitionNames.isEmpty()) {
