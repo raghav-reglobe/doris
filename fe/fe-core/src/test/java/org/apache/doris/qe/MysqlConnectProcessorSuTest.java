@@ -20,6 +20,7 @@ package org.apache.doris.qe;
 import org.apache.doris.analysis.UserIdentity;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.datasource.InternalCatalog;
+import org.apache.doris.mysql.MysqlCapability;
 import org.apache.doris.mysql.MysqlHandshakePacket;
 import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.mysql.protocol.MysqlProtocolAdapter;
@@ -67,7 +68,7 @@ public class MysqlConnectProcessorSuTest extends TestWithFeService {
         ConnectContext ctx = new ConnectContext();
         ctx.setCurrentUserIdentity(UserIdentity.createAnalyzedUserIdentWithIp("su_change_svc", "%"));
         ctx.setRemoteIP("127.0.0.1");
-        MysqlProtocolAdapter.of(ctx).setHandshakePacket(new MysqlHandshakePacket(0));
+        MysqlProtocolAdapter.of(ctx).setHandshakePacket(new MysqlHandshakePacket(0, MysqlCapability.serverCapability()));
         ctx.setThreadLocalInfo();
         new SuUserCommand(new UserIdentity("su_change_person", "%"),
                 Collections.singletonList("su_change_role"), workloadGroup).run(ctx, null);
