@@ -17,11 +17,17 @@
 
 package org.apache.doris.nereids.rules.analysis;
 
+import org.apache.doris.analysis.ExplainOptions;
+import org.apache.doris.analysis.StatementBase;
 import org.apache.doris.analysis.UserIdentity;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.common.Pair;
 import org.apache.doris.mysql.privilege.UserProperty;
+import org.apache.doris.nereids.parser.NereidsParser;
 import org.apache.doris.nereids.trees.plans.commands.SuUserCommand;
+import org.apache.doris.qe.OriginStatement;
+import org.apache.doris.qe.QueryState;
+import org.apache.doris.qe.StmtExecutor;
 import org.apache.doris.utframe.TestWithFeService;
 
 import com.google.common.collect.Lists;
@@ -52,6 +58,26 @@ public class HideInaccessibleColumnsSwitchedSessionTest extends TestWithFeServic
                 Lists.newArrayList(Pair.of(UserProperty.PROP_HIDE_INACCESSIBLE_COLUMNS, "true")), false);
     }
 
+    /**
+     * Runs the statement the way a connection does: parsed first, then executed. The star is narrowed only in a
+     * statement whose parsed form the statement context holds, which the executor's test constructor leaves out.
+     * Returns the plan, or the message the statement ends with.
+     */
+    private String planOrMessage(String sql) throws Exception {
+        connectContext.setThreadLocalInfo();
+        connectContext.getState().reset();
+        StatementBase statement = new NereidsParser().parseSQL(sql, connectContext.getSessionVariable()).get(0);
+        statement.setOrigStmt(new OriginStatement(sql, 0));
+        statement.setUserInfo(connectContext.getCurrentUserIdentity());
+        StmtExecutor executor = new StmtExecutor(connectContext, statement);
+        connectContext.setExecutor(executor);
+        executor.execute();
+        if (connectContext.getState().getStateType() == QueryState.MysqlStateType.ERR) {
+            return connectContext.getState().getErrorMessage();
+        }
+        return executor.planner().getExplainString(new ExplainOptions(false, false, false));
+    }
+
     @Test
     public void testSwitchedSessionKeepsTheRefusal() throws Exception {
         UserIdentity person = UserIdentity.createAnalyzedUserIdentWithIp(PERSON, "%");
@@ -59,7 +85,7 @@ public class HideInaccessibleColumnsSwitchedSessionTest extends TestWithFeServic
         // the person's own session
         connectContext.setCurrentUserIdentity(person);
         try {
-            String plan = getSQLPlanOrErrorMsg("explain select * from hics.t");
+            String plan = planOrMessage("explain select * from hics.t");
             Assertions.assertFalse(plan.contains(DENIED), plan);
             Assertions.assertFalse(plan.contains("c_secret"), plan);
             Assertions.assertTrue(plan.contains("c_name"), plan);
@@ -71,9 +97,9 @@ public class HideInaccessibleColumnsSwitchedSessionTest extends TestWithFeServic
         new SuUserCommand(person, Collections.singletonList("hics_role"), null).run(connectContext, null);
         try {
             Assertions.assertEquals(PERSON, connectContext.getQualifiedUser());
-            String message = getSQLPlanOrErrorMsg("explain select * from hics.t");
+            String message = planOrMessage("explain select * from hics.t");
             Assertions.assertTrue(message.contains(DENIED), message);
-            String plan = getSQLPlanOrErrorMsg("explain select c_id, c_name from hics.t");
+            String plan = planOrMessage("explain select c_id, c_name from hics.t");
             Assertions.assertFalse(plan.contains(DENIED), plan);
         } finally {
             connectContext.revertSessionNarrowing();
