@@ -1166,6 +1166,11 @@ public class NereidsPlanner extends Planner {
             plan += "\n\n\n group expression count exceeds memo_max_group_expression_size("
                     + ConnectContext.get().getSessionVariable().memoMaxGroupExpressionSize + ")\n";
         }
+        if (statementContext != null && !statementContext.getHiddenInaccessibleColumns().isEmpty()) {
+            // the only trace of a narrowed star: the statement itself returns fewer columns and says nothing
+            plan += "\n\n\nhide_inaccessible_columns: the star left out "
+                    + String.join(", ", statementContext.getHiddenInaccessibleColumns()) + "\n";
+        }
         if (statementContext != null) {
             if (!statementContext.getHints().isEmpty()) {
                 String hint = getHintExplainString(statementContext.getHints());

@@ -46,6 +46,7 @@ public class HideInaccessibleColumnsTest extends TestWithFeService {
     private static final String HIDER = "hic_hider";
     private static final String PLAIN = "hic_plain";
     private static final String DENIED = "does not have privilege";
+    private static final String NOTE = "hide_inaccessible_columns: the star left out";
 
     @Override
     protected void runBeforeAll() throws Exception {
@@ -105,12 +106,17 @@ public class HideInaccessibleColumnsTest extends TestWithFeService {
         }
     }
 
+    /** The star of the statement leaves c_secret out, keeps the given columns, and EXPLAIN says what it left out. */
     private void assertNarrowed(String sql, String... kept) throws Exception {
         String plan = explainAs(HIDER, sql);
         Assertions.assertFalse(plan.contains(DENIED), sql + "\n" + plan);
-        Assertions.assertFalse(plan.contains("c_secret"), sql + "\n" + plan);
+        int note = plan.indexOf(NOTE);
+        Assertions.assertTrue(note >= 0, sql + " should say what the star left out\n" + plan);
+        Assertions.assertTrue(plan.substring(note).contains("c_secret"), sql + "\n" + plan);
+        String body = plan.substring(0, note);
+        Assertions.assertFalse(body.contains("c_secret"), sql + "\n" + plan);
         for (String column : kept) {
-            Assertions.assertTrue(plan.contains(column), sql + " should keep " + column + "\n" + plan);
+            Assertions.assertTrue(body.contains(column), sql + " should keep " + column + "\n" + plan);
         }
     }
 
@@ -137,6 +143,14 @@ public class HideInaccessibleColumnsTest extends TestWithFeService {
         assertNarrowed("select * from hic.t t join hic.d d on t.c_id = d.c_id", "c_amount", "c_label");
         assertNarrowed("select t.*, d.c_label from hic.t t join hic.d d on t.c_id = d.c_id", "c_amount", "c_label");
         assertNarrowed("select * except(c_amount) from hic.t", "c_id", "c_name");
+        // the list a user writes today to get past the refusal keeps working, with and without the property
+        assertNarrowed("select * except(c_secret) from hic.t", "c_id", "c_name", "c_amount");
+        assertNarrowed("select t.* except(c_secret), d.c_label from hic.t t join hic.d d on t.c_id = d.c_id",
+                "c_amount", "c_label");
+        assertNarrowed("select * except(c_secret, c_amount) from hic.t", "c_id", "c_name");
+        String plain = explainAs(PLAIN, "select * except(c_secret) from hic.t");
+        Assertions.assertFalse(plain.contains(DENIED), plain);
+        Assertions.assertFalse(plain.contains(NOTE), plain);
         // the view's own column grants decide for a view
         assertNarrowed("select * from hic.v", "c_id", "c_name");
     }
@@ -183,6 +197,7 @@ public class HideInaccessibleColumnsTest extends TestWithFeService {
             String plan = explainAs(user, "select * from hic.v_none");
             Assertions.assertFalse(plan.contains(DENIED), user + "\n" + plan);
             Assertions.assertTrue(plan.contains("c_x"), user + "\n" + plan);
+            Assertions.assertFalse(plan.contains(NOTE), user + "\n" + plan);
             plan = explainAs(user, "select * from hic.v_safe");
             Assertions.assertFalse(plan.contains(DENIED), user + "\n" + plan);
             Assertions.assertTrue(plan.contains("c_name"), user + "\n" + plan);
