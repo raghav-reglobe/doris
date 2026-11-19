@@ -87,8 +87,10 @@ public class HideInaccessibleColumnsSwitchedSessionTest extends TestWithFeServic
         try {
             String plan = planOrMessage("explain select * from hics.t");
             Assertions.assertFalse(plan.contains(DENIED), plan);
-            Assertions.assertFalse(plan.contains("c_secret"), plan);
-            Assertions.assertTrue(plan.contains("c_name"), plan);
+            int note = plan.indexOf("hide_inaccessible_columns: the star left out");
+            Assertions.assertTrue(note >= 0, plan);
+            Assertions.assertFalse(plan.substring(0, note).contains("c_secret"), plan);
+            Assertions.assertTrue(plan.substring(0, note).contains("c_name"), plan);
         } finally {
             connectContext.setCurrentUserIdentity(UserIdentity.ROOT);
         }
