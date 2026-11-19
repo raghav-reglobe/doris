@@ -118,6 +118,7 @@ import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableList.Builder;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import org.apache.commons.lang3.StringUtils;
 
@@ -424,8 +425,14 @@ public class ExpressionAnalyzer extends SubExprAnalyzer<ExpressionRewriteContext
         boolean showHidden = Util.showHiddenColumns();
 
         List<Slot> scopeSlots = qualifier.isEmpty() ? getScope().getAsteriskSlots() : getScope().getSlots();
+        // hide_inaccessible_columns: the columns the user may not read are left out of the star
+        Set<ExprId> inaccessibleSlots = currentPlan == null ? ImmutableSet.of()
+                : HideInaccessibleColumns.inaccessibleSlots(currentPlan, context.cascadesContext);
         ImmutableList.Builder<Slot> showSlots = ImmutableList.builderWithExpectedSize(scopeSlots.size());
         for (Slot slot : scopeSlots) {
+            if (inaccessibleSlots.contains(slot.getExprId())) {
+                continue;
+            }
             if (!(slot instanceof SlotReference) || (((SlotReference) slot).isVisible()) || showHidden) {
                 showSlots.add(slot);
             }

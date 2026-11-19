@@ -74,6 +74,10 @@ public class CommonUserProperties implements GsonPostProcessable {
     @SerializedName(value = "qft", alternate = {"queryFreshnessTolerance"})
     private long queryFreshnessToleranceMs = -1;
 
+    // When true, a `*` in the select list of this user's query expands only to the columns the user may read.
+    @SerializedName(value = "hic", alternate = {"hideInaccessibleColumns"})
+    private boolean hideInaccessibleColumns = false;
+
     private String[] sqlBlockRulesSplit = {};
 
     long getMaxConn() {
@@ -188,6 +192,14 @@ public class CommonUserProperties implements GsonPostProcessable {
 
     public void setEnablePreferCachedRowset(boolean enablePreferCachedRowset) {
         this.enablePreferCachedRowset = enablePreferCachedRowset;
+    }
+
+    public boolean isHideInaccessibleColumns() {
+        return hideInaccessibleColumns;
+    }
+
+    public void setHideInaccessibleColumns(boolean hideInaccessibleColumns) {
+        this.hideInaccessibleColumns = hideInaccessibleColumns;
     }
 
     @Override

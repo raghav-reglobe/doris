@@ -1086,9 +1086,15 @@ public class BindRelation extends OneAnalysisRuleFactory {
         }
         CascadesContext viewContext = CascadesContext.initContext(
                 parentContext.getStatementContext(), parsedViewPlan, PhysicalProperties.ANY);
-        viewContext.keepOrShowPlanProcess(parentContext.showPlanProcess(), () -> {
-            viewContext.newAnalyzer().analyze();
-        });
+        StatementContext statementContext = parentContext.getStatementContext();
+        statementContext.enterViewBody();
+        try {
+            viewContext.keepOrShowPlanProcess(parentContext.showPlanProcess(), () -> {
+                viewContext.newAnalyzer().analyze();
+            });
+        } finally {
+            statementContext.leaveViewBody();
+        }
         parentContext.addPlanProcesses(viewContext.getPlanProcesses());
         // we should remove all group expression of the plan which in other memo, so the groupId would not conflict
         return viewContext.getRewritePlan();

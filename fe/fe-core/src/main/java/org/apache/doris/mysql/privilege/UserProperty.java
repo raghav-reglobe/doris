@@ -76,6 +76,7 @@ public class UserProperty {
 
     public static final String PROP_ENABLE_PREFER_CACHED_ROWSET = "enable_prefer_cached_rowset";
     public static final String PROP_QUERY_FRESHNESS_TOLERANCE = "query_freshness_tolerance_ms";
+    public static final String PROP_HIDE_INACCESSIBLE_COLUMNS = "hide_inaccessible_columns";
 
     // for system user
     public static final Set<Pattern> ADVANCED_PROPERTIES = Sets.newHashSet();
@@ -110,6 +111,9 @@ public class UserProperty {
         ADVANCED_PROPERTIES.add(Pattern.compile("^" + PROP_EXEC_MEM_LIMIT + "$", Pattern.CASE_INSENSITIVE));
         ADVANCED_PROPERTIES.add(Pattern.compile("^" + PROP_USER_QUERY_TIMEOUT + "$", Pattern.CASE_INSENSITIVE));
         ADVANCED_PROPERTIES.add(Pattern.compile("^" + PROP_USER_INSERT_TIMEOUT + "$", Pattern.CASE_INSENSITIVE));
+        // It changes what a statement returns, so a user does not set it for themselves.
+        ADVANCED_PROPERTIES.add(Pattern.compile("^" + PROP_HIDE_INACCESSIBLE_COLUMNS + "$",
+                Pattern.CASE_INSENSITIVE));
 
         COMMON_PROPERTIES.add(Pattern.compile("^" + PROP_QUOTA + ".", Pattern.CASE_INSENSITIVE));
         COMMON_PROPERTIES.add(Pattern.compile("^" + PROP_DEFAULT_INIT_CATALOG + "$", Pattern.CASE_INSENSITIVE));
@@ -183,6 +187,10 @@ public class UserProperty {
         return commonProperties.getEnablePreferCachedRowset();
     }
 
+    public boolean isHideInaccessibleColumns() {
+        return commonProperties.isHideInaccessibleColumns();
+    }
+
     public void update(List<Pair<String, String>> properties) throws UserException {
         update(properties, false);
     }
@@ -202,6 +210,7 @@ public class UserProperty {
         String workloadGroup = this.commonProperties.getWorkloadGroup();
         long queryFreshnessToleranceMs = this.commonProperties.getQueryFreshnessToleranceMs();
         boolean enablePreferCachedRowset = this.commonProperties.getEnablePreferCachedRowset();
+        boolean hideInaccessibleColumns = this.commonProperties.isHideInaccessibleColumns();
 
         String newDefaultCloudCluster = defaultCloudCluster;
 
@@ -355,6 +364,15 @@ public class UserProperty {
                 } catch (NumberFormatException e) {
                     throw new DdlException(PROP_ENABLE_PREFER_CACHED_ROWSET + " is not boolean");
                 }
+            } else if (keyArr[0].equalsIgnoreCase(PROP_HIDE_INACCESSIBLE_COLUMNS)) {
+                // set property "hide_inaccessible_columns" = "true";
+                if (keyArr.length != 1) {
+                    throw new DdlException(PROP_HIDE_INACCESSIBLE_COLUMNS + " format error");
+                }
+                if (!"true".equalsIgnoreCase(value) && !"false".equalsIgnoreCase(value)) {
+                    throw new DdlException(PROP_HIDE_INACCESSIBLE_COLUMNS + " is not boolean");
+                }
+                hideInaccessibleColumns = Boolean.parseBoolean(value);
             } else {
                 if (isReplay) {
                     // After using SET PROPERTY to modify the user property, if FE rolls back to a version without
@@ -381,6 +399,7 @@ public class UserProperty {
         this.commonProperties.setWorkloadGroup(workloadGroup);
         this.commonProperties.setQueryFreshnessToleranceMs(queryFreshnessToleranceMs);
         this.commonProperties.setEnablePreferCachedRowset(enablePreferCachedRowset);
+        this.commonProperties.setHideInaccessibleColumns(hideInaccessibleColumns);
         defaultCloudCluster = newDefaultCloudCluster;
     }
 
@@ -493,6 +512,8 @@ public class UserProperty {
                 String.valueOf(commonProperties.getEnablePreferCachedRowset())));
         result.add(Lists.newArrayList(PROP_QUERY_FRESHNESS_TOLERANCE,
                 String.valueOf(commonProperties.getQueryFreshnessToleranceMs())));
+        result.add(Lists.newArrayList(PROP_HIDE_INACCESSIBLE_COLUMNS,
+                String.valueOf(commonProperties.isHideInaccessibleColumns())));
 
         // default cloud cluster
         if (defaultCloudCluster != null) {
