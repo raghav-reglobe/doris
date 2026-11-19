@@ -1612,6 +1612,15 @@ public class Auth implements Writable {
         }
     }
 
+    public boolean isHideInaccessibleColumns(String qualifiedUser) {
+        readLock();
+        try {
+            return propertyMgr.isHideInaccessibleColumns(qualifiedUser);
+        } finally {
+            readUnlock();
+        }
+    }
+
     public long getQueryFreshnessToleranceMs(String qualifiedUser) {
         readLock();
         try {

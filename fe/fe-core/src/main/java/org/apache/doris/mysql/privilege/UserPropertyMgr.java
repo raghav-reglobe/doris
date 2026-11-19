@@ -262,6 +262,15 @@ public class UserPropertyMgr implements Writable {
         return existProperty.getEnablePreferCachedRowset();
     }
 
+    public boolean isHideInaccessibleColumns(String qualifiedUser) {
+        UserProperty existProperty = propertyMap.get(qualifiedUser);
+        existProperty = getPropertyIfNull(qualifiedUser, existProperty);
+        if (existProperty == null) {
+            return false;
+        }
+        return existProperty.isHideInaccessibleColumns();
+    }
+
     public long getQueryFreshnessToleranceMs(String qualifiedUser) {
         UserProperty existProperty = propertyMap.get(qualifiedUser);
         existProperty = getPropertyIfNull(qualifiedUser, existProperty);

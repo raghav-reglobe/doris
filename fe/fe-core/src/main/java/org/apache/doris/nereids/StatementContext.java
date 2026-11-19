@@ -242,6 +242,11 @@ public class StatementContext implements Closeable {
     // RewriteCteChildren refreshes the consumer maps with it. ConstantPropagation is currently the only publisher.
     private final Map<CTEId, Map<ExprId, ExprId>> producerExprIdRemap = new HashMap<>();
     private final Set<String> viewDdlSqlSet = Sets.newHashSet();
+    // Greater than 0 while the body of a view is analyzed. A view is read with its own authority, so the body is
+    // not narrowed by what the reader may see of the tables under it.
+    private int viewBodyDepth = 0;
+    // The columns a `*` did not expand to because the user may not read them (hide_inaccessible_columns).
+    private final Set<String> hiddenInaccessibleColumns = Sets.newLinkedHashSet();
     private final SqlCacheContext sqlCacheContext;
     private final boolean showQuery;
 
@@ -1511,6 +1516,26 @@ public class StatementContext implements Closeable {
 
     public void addViewDdlSql(String ddlSql) {
         this.viewDdlSqlSet.add(ddlSql);
+    }
+
+    public void enterViewBody() {
+        viewBodyDepth++;
+    }
+
+    public void leaveViewBody() {
+        viewBodyDepth--;
+    }
+
+    public boolean isAnalyzingViewBody() {
+        return viewBodyDepth > 0;
+    }
+
+    public void addHiddenInaccessibleColumn(String qualifiedColumn) {
+        hiddenInaccessibleColumns.add(qualifiedColumn);
+    }
+
+    public List<String> getHiddenInaccessibleColumns() {
+        return ImmutableList.copyOf(hiddenInaccessibleColumns);
     }
 
     public List<String> getViewDdlSqls() {
