@@ -61,6 +61,7 @@ import java.util.Set;
  * <li>Only in a query whose rows go back to the client. INSERT ... SELECT, CREATE TABLE AS SELECT, CREATE VIEW,
  *     an export or a load would store the narrowed column list, so they keep the refusal.</li>
  * <li>Not inside the body of a view: a view is read with its own authority.</li>
+ * <li>Not in a session switched by SU: the property follows the user's own login.</li>
  * <li>A table or view of which the user may read no column is left whole, so the statement fails as before.</li>
  * </ul>
  */
@@ -93,6 +94,11 @@ public final class HideInaccessibleColumns {
     private static boolean appliesTo(CascadesContext cascadesContext) {
         ConnectContext connectContext = cascadesContext.getConnectContext();
         if (connectContext == null || connectContext.isSkipAuth() || connectContext.getQualifiedUser() == null) {
+            return false;
+        }
+        // A session switched by SU acts for the user through a narrowed role set, and its callers rely on the
+        // refusal to learn that a statement reaches beyond that set. The property follows the user's own login only.
+        if (connectContext.getAuthenticatedIdentity() != null) {
             return false;
         }
         StatementContext statementContext = cascadesContext.getStatementContext();
