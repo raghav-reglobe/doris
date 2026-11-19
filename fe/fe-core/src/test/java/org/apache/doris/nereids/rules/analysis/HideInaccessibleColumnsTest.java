@@ -17,14 +17,20 @@
 
 package org.apache.doris.nereids.rules.analysis;
 
+import org.apache.doris.analysis.ExplainOptions;
+import org.apache.doris.analysis.StatementBase;
 import org.apache.doris.analysis.UserIdentity;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.Pair;
 import org.apache.doris.common.UserException;
 import org.apache.doris.mysql.privilege.UserProperty;
+import org.apache.doris.nereids.parser.NereidsParser;
 import org.apache.doris.nereids.trees.plans.commands.info.SetUserPropertyVarOp;
 import org.apache.doris.qe.ConnectContext;
+import org.apache.doris.qe.OriginStatement;
+import org.apache.doris.qe.QueryState;
+import org.apache.doris.qe.StmtExecutor;
 import org.apache.doris.utframe.TestWithFeService;
 
 import com.google.common.collect.Lists;
@@ -69,11 +75,31 @@ public class HideInaccessibleColumnsTest extends TestWithFeService {
                 Lists.newArrayList(Pair.of(UserProperty.PROP_HIDE_INACCESSIBLE_COLUMNS, "true")), false);
     }
 
+    /**
+     * Runs the statement the way a connection does: parsed first, then executed. The star is narrowed only in a
+     * statement whose parsed form the statement context holds, which the executor's test constructor leaves out.
+     * Returns the plan, or the message the statement ends with.
+     */
+    private String planOrMessage(String sql) throws Exception {
+        connectContext.setThreadLocalInfo();
+        connectContext.getState().reset();
+        StatementBase statement = new NereidsParser().parseSQL(sql, connectContext.getSessionVariable()).get(0);
+        statement.setOrigStmt(new OriginStatement(sql, 0));
+        statement.setUserInfo(connectContext.getCurrentUserIdentity());
+        StmtExecutor executor = new StmtExecutor(connectContext, statement);
+        connectContext.setExecutor(executor);
+        executor.execute();
+        if (connectContext.getState().getStateType() == QueryState.MysqlStateType.ERR) {
+            return connectContext.getState().getErrorMessage();
+        }
+        return executor.planner().getExplainString(new ExplainOptions(false, false, false));
+    }
+
     /** The plan of the statement for the user, or the message the statement ends with. */
     private String explainAs(String user, String sql) throws Exception {
         useUser(user);
         try {
-            return getSQLPlanOrErrorMsg("explain " + sql);
+            return planOrMessage("explain " + sql);
         } finally {
             connectContext.setCurrentUserIdentity(UserIdentity.ROOT);
         }
@@ -120,6 +146,18 @@ public class HideInaccessibleColumnsTest extends TestWithFeService {
         assertNarrowed("select * from (select * from hic.t) q", "c_id", "c_name", "c_amount");
         assertNarrowed("with c as (select * from hic.t) select * from c", "c_id", "c_name", "c_amount");
         assertNarrowed("select * from hic.t union all select * from hic.t", "c_id", "c_name", "c_amount");
+    }
+
+    @Test
+    public void testStatementWithoutParsedFormIsNotNarrowed() throws Exception {
+        // e.g. a statement the FE runs for itself: without the parsed statement nothing says its rows go to a client
+        useUser(HIDER);
+        try {
+            String message = getSQLPlanOrErrorMsg("explain select * from hic.t");
+            Assertions.assertTrue(message.contains(DENIED), message);
+        } finally {
+            connectContext.setCurrentUserIdentity(UserIdentity.ROOT);
+        }
     }
 
     @Test
